@@ -1,6 +1,79 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import ZAI from 'z-ai-web-dev-sdk';
+
+// Dual-mode AI call:
+// - Z.ai platform (has /etc/.z-ai-config): use z-ai-web-dev-sdk
+// - Vercel / external (has NVIDIA_* env vars): call NVIDIA API directly via fetch
+let ZAI: typeof import('z-ai-web-dev-sdk').default | null = null;
+try {
+  // Only import SDK if we're NOT on Vercel (avoids config file issues)
+  if (!process.env.VERCEL) {
+    ZAI = (await import('z-ai-web-dev-sdk')).default;
+  }
+} catch {
+  // SDK not available, will use direct API calls
+}
+
+const isZAIPlatform = !process.env.VERCEL && !!ZAI;
+
+/**
+ * Call LLM - returns the assistant message content
+ */
+async function callLLM(options: {
+  systemPrompt: string;
+  userMessage: string;
+  temperature?: number;
+  maxTokens?: number;
+  model?: string;
+}): Promise<string> {
+  if (isZAIPlatform && ZAI) {
+    // Mode 1: Z.ai platform - use z-ai-web-dev-sdk
+    const zai = await ZAI.create();
+    const completion = await zai.chat.completions.create({
+      messages: [
+        { role: 'system', content: options.systemPrompt },
+        { role: 'user', content: options.userMessage },
+      ],
+      temperature: options.temperature,
+      max_tokens: options.maxTokens,
+    });
+    return completion.choices?.[0]?.message?.content || '';
+  }
+
+  // Mode 2: Vercel / External - call NVIDIA API directly
+  const baseUrl = (process.env.NVIDIA_BASE_URL || '').replace(/\/+$/, '');
+  const apiKey = process.env.NVIDIA_API_KEY || '';
+  const model = options.model || process.env.NVIDIA_MODEL || 'nvidia/llama-3.1-nemotron-70b-instruct';
+
+  if (!baseUrl || !apiKey) {
+    throw new Error('AI configuration missing. Set NVIDIA_BASE_URL and NVIDIA_API_KEY environment variables.');
+  }
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: options.systemPrompt },
+        { role: 'user', content: options.userMessage },
+      ],
+      temperature: options.temperature ?? 0.7,
+      max_tokens: options.maxTokens ?? 4096,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`NVIDIA API error ${response.status}: ${errorBody}`);
+  }
+
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content || '';
+}
 
 // Helper: Extract JSON from LLM response (handles markdown code blocks)
 function extractJSON(text: string): unknown[] | null {
@@ -248,18 +321,13 @@ export async function POST(request: NextRequest) {
     const temperature = agentConfig?.temperature ?? 0.7;
     const maxTokens = agentConfig?.maxTokens ?? 4096;
 
-    // Call LLM via z-ai-web-dev-sdk
-    const zai = await ZAI.create();
-    const completion = await zai.chat.completions.create({
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: contextMessage },
-      ],
+    // Call LLM (auto-selects Z.ai SDK or NVIDIA API based on environment)
+    const result = await callLLM({
+      systemPrompt,
+      userMessage: contextMessage,
       temperature,
-      max_tokens: maxTokens,
+      maxTokens: maxTokens,
     });
-
-    const result = completion.choices[0]?.message?.content || '';
 
     // Save agent chat log
     const chatLog = await db.agentChatLog.create({
