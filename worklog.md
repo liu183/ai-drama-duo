@@ -99,3 +99,25 @@ Stage Summary:
 - 页面正常渲染，显示中文标题
 - API 创建短剧成功，自动生成集数
 - ESLint 零错误
+
+---
+Task ID: 1
+Agent: main
+Task: 修复AI改写步骤无内容问题，验证全链路
+
+Work Log:
+- 读取 agent/route.ts、episode-studio.tsx、api.ts、所有API路由等核心文件
+- 发现3个关键Bug + 1个次要Bug
+- Bug1(致命): script_rewriter没有加载episode.content，AI只收到空指令
+- Bug2(致命): 前端没有解包API响应 { data: ... }，所有episode字段都是undefined
+- Bug3(高): Agent响应解析错误，res.result应该是res.data?.result
+- Bug4(中): 错误处理中重复读取request body
+- 额外发现: storyboard duration字段AI返回字符串"12秒"但DB需要Float
+- 修复所有Bug并本地测试
+- 全链路测试通过：script_rewriter → extractor → voice_assigner → storyboard_breaker
+
+Stage Summary:
+- 修复4个Bug，2个commits: 43ec103, bff1c35
+- 全链路4个AI Agent全部测试通过
+- 本地dev server验证完成
+- Git remote未配置，无法推送到GitHub/Vercel
