@@ -193,6 +193,24 @@ export async function POST(request: NextRequest) {
 
     // Build context based on agentType
     let contextMessage = message;
+
+    // script_rewriter: load raw novel content for rewriting
+    if (agentType === 'script_rewriter' && episodeId) {
+      const episode = await db.episode.findUnique({
+        where: { id: episodeId },
+        select: { content: true, title: true },
+      });
+      if (episode && episode.content) {
+        contextMessage = `小说标题：${episode.title}\n\n小说原文内容：\n${episode.content}\n\n${message || '请将以上小说内容改写为短剧剧本格式。'}`;
+      } else {
+        return NextResponse.json(
+          { error: '该集数还没有原始内容，请先在第1步输入并保存小说原文' },
+          { status: 400 }
+        );
+      }
+    }
+
+    // extractor / storyboard_breaker / voice_assigner: load script content for analysis
     if (agentType === 'extractor' || agentType === 'storyboard_breaker' || agentType === 'voice_assigner') {
       if (episodeId) {
         const episode = await db.episode.findUnique({
@@ -412,7 +430,6 @@ export async function POST(request: NextRequest) {
 
     // Save error to chat log if we have the required fields
     try {
-      const body = await request.json();
       if (body.agentType && body.dramaId) {
         await db.agentChatLog.create({
           data: {

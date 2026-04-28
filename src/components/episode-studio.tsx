@@ -197,11 +197,13 @@ export default function EpisodeStudioView({
         sceneApi.list(dramaId),
         storyboardApi.list(episodeId),
       ]);
-      setEpisode(ep);
+      // API responses are wrapped in { data: ... }, unwrap them
+      const epData = ep.data || ep;
+      setEpisode(epData);
       setCharacters(Array.isArray(chars) ? chars : chars.data || chars.items || []);
       setScenes(Array.isArray(sceneList) ? sceneList : sceneList.data || sceneList.items || []);
       setStoryboards(Array.isArray(sbList) ? sbList : sbList.data || sbList.items || []);
-      setRawContent(ep.content || '');
+      setRawContent(epData.content || '');
     } catch {
       toast.error('加载数据失败');
     } finally {
@@ -227,8 +229,9 @@ export default function EpisodeStudioView({
     if (!episode) return;
     setSaving(true);
     try {
-      await episodeApi.update(episodeId, { content: rawContent });
-      setEpisode({ ...episode, content: rawContent });
+      const updateRes = await episodeApi.update(episodeId, { content: rawContent });
+      const updatedData = updateRes.data || updateRes;
+      setEpisode({ ...episode, ...updatedData, content: rawContent });
       toast.success('原始内容已保存');
     } catch {
       toast.error('保存失败');
@@ -262,7 +265,8 @@ export default function EpisodeStudioView({
           : '请将剧本拆解为分镜脚本',
       });
 
-      setAgentResult(res.result || res.output || res.message || JSON.stringify(res, null, 2));
+      const agentData = res.data || res;
+      setAgentResult(agentData.result || agentData.output || agentData.message || JSON.stringify(agentData, null, 2));
       toast.success('Agent 执行完成');
       // Reload data
       await loadData();

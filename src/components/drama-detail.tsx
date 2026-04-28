@@ -171,7 +171,7 @@ export default function DramaDetailView({
     setLoading(true);
     try {
       const data = await dramaApi.get(dramaId);
-      setDrama(data);
+      setDrama(data.data || data);
     } catch {
       toast.error('加载短剧详情失败');
     } finally {
