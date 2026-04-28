@@ -371,7 +371,7 @@ export async function POST(request: NextRequest) {
                   atmosphere: (sb.atmosphere as string) || '',
                   dialogue: (sb.dialogue as string) || '',
                   description: (sb.description as string) || '',
-                  duration: (sb.duration as number) || 10,
+                  duration: parseFloat(String(sb.duration)) || 10,
                   status: 'pending',
                 },
               });
