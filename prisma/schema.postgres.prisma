@@ -1,0 +1,249 @@
+// ============================================================================
+// 笔境 AI - Database Schema for PostgreSQL (Vercel / Neon)
+// Vercel 部署时自动使用此 schema
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== Core Entity Tables ====================
+
+model Drama {
+  id             String   @id @default(cuid())
+  title          String
+  description    String   @default("")
+  genre          String   @default("")
+  style          String   @default("realistic")
+  totalEpisodes  Int      @default(10)
+  totalDuration  Float    @default(0)
+  status         String   @default("draft")
+  thumbnail      String   @default("")
+  tags           String   @default("[]")
+  metadata       String   @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  deletedAt      DateTime?
+
+  episodes    Episode[]
+  characters  Character[]
+  scenes      Scene[]
+}
+
+model Episode {
+  id              String    @id @default(cuid())
+  dramaId         String
+  episodeNumber   Int
+  title           String    @default("")
+  content         String    @default("")
+  scriptContent   String    @default("")
+  description     String    @default("")
+  duration        Float     @default(0)
+  status          String    @default("draft")
+  videoUrl        String    @default("")
+  imageConfig     String    @default("{}")
+  videoConfig     String    @default("{}")
+  audioConfig     String    @default("{}")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  drama       Drama       @relation(fields: [dramaId], references: [id], onDelete: Cascade)
+  characters  EpisodeCharacter[]
+  scenes      EpisodeScene[]
+  storyboards Storyboard[]
+}
+
+model Character {
+  id              String    @id @default(cuid())
+  dramaId         String
+  name            String
+  role            String    @default("supporting")
+  description     String    @default("")
+  appearance      String    @default("")
+  personality     String    @default("")
+  voiceStyle      String    @default("")
+  imageUrl        String    @default("")
+  referenceImages String    @default("[]")
+  seedValue       String    @default("")
+  sortOrder       Int       @default(0)
+  voiceProvider   String    @default("")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  drama      Drama                @relation(fields: [dramaId], references: [id], onDelete: Cascade)
+  episodes   EpisodeCharacter[]
+  storyboards StoryboardCharacter[]
+}
+
+model Scene {
+  id               String    @id @default(cuid())
+  dramaId          String
+  episodeId        String?
+  location         String    @default("")
+  time             String    @default("")
+  prompt           String    @default("")
+  storyboardCount  Int       @default(0)
+  imageUrl         String    @default("")
+  status           String    @default("pending")
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  drama      Drama        @relation(fields: [dramaId], references: [id], onDelete: Cascade)
+  episodes   EpisodeScene[]
+  storyboards Storyboard[]
+}
+
+model Storyboard {
+  id                  String    @id @default(cuid())
+  episodeId           String
+  sceneId             String?
+  storyboardNumber    Int
+  title               String    @default("")
+  location            String    @default("")
+  time                String    @default("")
+  shotType            String    @default("")
+  angle               String    @default("")
+  movement            String    @default("")
+  action              String    @default("")
+  result              String    @default("")
+  atmosphere          String    @default("")
+  imagePrompt         String    @default("")
+  videoPrompt         String    @default("")
+  bgmPrompt           String    @default("")
+  soundEffect         String    @default("")
+  dialogue            String    @default("")
+  description         String    @default("")
+  duration            Float     @default(10)
+  composedImage       String    @default("")
+  firstFrameImage     String    @default("")
+  lastFrameImage      String    @default("")
+  referenceImages     String    @default("[]")
+  videoUrl            String    @default("")
+  ttsAudioUrl         String    @default("")
+  subtitleUrl         String    @default("")
+  composedVideoUrl    String    @default("")
+  status              String    @default("pending")
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  episode   Episode               @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  characters StoryboardCharacter[]
+  scene     Scene?                @relation(fields: [sceneId], references: [id])
+}
+
+// ==================== Junction Tables ====================
+
+model EpisodeCharacter {
+  id         String @id @default(cuid())
+  episodeId  String
+  characterId String
+
+  episode   Episode  @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@unique([episodeId, characterId])
+}
+
+model EpisodeScene {
+  id        String @id @default(cuid())
+  episodeId String
+  sceneId   String
+
+  episode Episode @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  scene   Scene   @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+
+  @@unique([episodeId, sceneId])
+}
+
+model StoryboardCharacter {
+  id           String @id @default(cuid())
+  storyboardId String
+  characterId  String
+
+  storyboard Storyboard @relation(fields: [storyboardId], references: [id], onDelete: Cascade)
+  character  Character  @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@unique([storyboardId, characterId])
+}
+
+// ==================== AI Configuration Tables ====================
+
+model AiServiceConfig {
+  id          String   @id @default(cuid())
+  name        String   @default("")
+  serviceType String   @default("text")
+  provider    String   @default("")
+  apiKey      String   @default("")
+  baseUrl     String   @default("")
+  model       String   @default("")
+  isActive    Boolean  @default(false)
+  priority    Int      @default(0)
+  config      String   @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model AgentConfig {
+  id          String   @id @default(cuid())
+  agentType   String   @unique
+  systemPrompt String  @default("")
+  model       String   @default("")
+  temperature Float    @default(0.7)
+  maxTokens   Int      @default(4096)
+  maxSteps    Int      @default(20)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ==================== Agent Chat Log ====================
+
+model AgentChatLog {
+  id         String   @id @default(cuid())
+  dramaId    String?
+  episodeId  String?
+  agentType  String
+  input      String
+  output     String
+  status     String   @default("pending")
+  createdAt  DateTime @default(now())
+}
+
+// ==================== Generation Task Tables ====================
+
+model ImageGeneration {
+  id            String   @id @default(cuid())
+  dramaId       String?
+  storyboardId  String?
+  characterId   String?
+  sceneId       String?
+  prompt        String
+  provider      String   @default("")
+  model         String   @default("")
+  status        String   @default("pending")
+  imageUrl      String   @default("")
+  localPath     String   @default("")
+  config        String   @default("{}")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model VideoGeneration {
+  id            String   @id @default(cuid())
+  dramaId       String?
+  storyboardId  String?
+  prompt        String
+  provider      String   @default("")
+  model         String   @default("")
+  referenceMode String   @default("first_frame")
+  status        String   @default("pending")
+  videoUrl      String   @default("")
+  localPath     String   @default("")
+  config        String   @default("{}")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
