@@ -224,6 +224,17 @@ const AGENT_PROMPTS: Record<string, string> = {
   voice_assigner: `你是一位专业的配音导演。请根据角色的性格、年龄、性别等特征，为每个角色推荐合适的配音风格。
 可用配音风格：温柔女声/霸道男声/少女音/正太音/御姐音/大叔音/清冷女声/沙哑男声/磁性男声/甜美女声
 输出格式（JSON数组）：[{"name":"角色名","voiceStyle":"配音风格","voiceProvider":"default"}]`,
+
+  image_prompt_generator: `你是一位专业的AI画面提示词专家。你的任务是根据分镜脚本的内容，为每个分镜生成高质量的英文画面提示词（用于AI绘图）。
+要求：
+1. 提示词必须是英文
+2. 包含场景、人物、动作、氛围、光影等描述
+3. 风格统一为"cinematic, high quality, detailed"
+4. 每个提示词50-100个英文单词
+5. 保持人物外貌和服装的一致性
+
+输出格式为JSON数组：
+[{"storyboardNumber":1,"imagePrompt":"cinematic shot, ..."}]`,
 };
 
 // POST /api/agent - Run an AI agent task
@@ -245,7 +256,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const validTypes = ['script_rewriter', 'extractor', 'storyboard_breaker', 'voice_assigner'];
+    const validTypes = ['script_rewriter', 'extractor', 'storyboard_breaker', 'voice_assigner', 'image_prompt_generator'];
     if (!validTypes.includes(agentType)) {
       return NextResponse.json(
         { error: `Invalid agentType. Must be one of: ${validTypes.join(', ')}` },
@@ -295,6 +306,28 @@ export async function POST(request: NextRequest) {
           if (scriptContent) {
             contextMessage = `剧本标题：${episode.title}\n\n剧本内容：\n${scriptContent}\n\n${message || '请按要求分析以上剧本。'}`;
           }
+        }
+      }
+    }
+
+    // image_prompt_generator: load storyboards for prompt generation
+    if (agentType === 'image_prompt_generator') {
+      if (episodeId) {
+        const storyboards = await db.storyboard.findMany({
+          where: { episodeId },
+          orderBy: { storyboardNumber: 'asc' },
+          select: { storyboardNumber: true, title: true, location: true, time: true, shotType: true, angle: true, action: true, atmosphere: true, dialogue: true, description: true },
+        });
+        if (storyboards.length > 0) {
+          const sbInfo = storyboards.map(sb =>
+            `分镜#${sb.storyboardNumber} "${sb.title || ''}" | 地点:${sb.location} 时间:${sb.time} 镜头:${sb.shotType} 角度:${sb.angle} 动作:${sb.action} 氛围:${sb.atmosphere} 台词:${sb.dialogue} 描述:${sb.description}`
+          ).join('\n---\n');
+          contextMessage = `共${storyboards.length}个分镜，请为每个分镜生成英文画面提示词：\n\n${sbInfo}\n\n${message || '请为每个分镜生成英文画面提示词。'}`;
+        } else {
+          return NextResponse.json(
+            { error: '该集数还没有分镜数据，请先在第5步生成分镜' },
+            { status: 400 }
+          );
         }
       }
     }
@@ -477,6 +510,33 @@ export async function POST(request: NextRequest) {
           processedResult = {
             updatedCount: updateResults.filter(Boolean).length,
             assignments: voiceAssignments,
+          };
+        } else {
+          processedResult = { rawResult: result, updatedCount: 0 };
+        }
+        break;
+      }
+
+      case 'image_prompt_generator': {
+        // Parse the returned prompts and save to storyboards
+        const prompts = extractJSON(result);
+        if (prompts && prompts.length > 0 && episodeId) {
+          const updateResults = await Promise.all(
+            prompts.map(async (p: Record<string, unknown>) => {
+              const sbNum = p.storyboardNumber as number;
+              const prompt = (p.imagePrompt as string) || '';
+              if (!sbNum || !prompt) return null;
+
+              return db.storyboard.updateMany({
+                where: { episodeId, storyboardNumber: sbNum },
+                data: { imagePrompt: prompt },
+              });
+            })
+          );
+
+          processedResult = {
+            updatedCount: updateResults.filter(Boolean).length,
+            prompts,
           };
         } else {
           processedResult = { rawResult: result, updatedCount: 0 };

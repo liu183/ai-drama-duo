@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft,
@@ -29,6 +29,10 @@ import {
   MessageSquare,
   Clock,
   Eye,
+  AlertCircle,
+  Wand2,
+  Layers,
+  ImagePlus,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -135,6 +139,110 @@ const AGENT_TYPES: Record<string, string> = {
   character_extract: 'extractor',
   voice_assign: 'voice_assigner',
   storyboard: 'storyboard_breaker',
+  image_gen: 'image_prompt_generator',
+};
+
+// ==================== AI Processing Visualization Steps ====================
+const AGENT_STEPS: Record<string, string[]> = {
+  script_rewriter: [
+    '分析原始小说内容...',
+    '识别场景和人物...',
+    '提取关键对话和动作...',
+    '转换为剧本格式...',
+    '优化剧本节奏和结构...',
+    '输出最终剧本...',
+  ],
+  extractor: [
+    '分析剧本内容...',
+    '识别出场角色...',
+    '提取角色特征和关系...',
+    '识别场景信息...',
+    '生成角色和场景数据...',
+  ],
+  voice_assigner: [
+    '加载角色列表...',
+    '分析角色性格特征...',
+    '匹配最佳配音风格...',
+    '分配配音方案...',
+  ],
+  storyboard_breaker: [
+    '分析剧本结构...',
+    '划分场景段落...',
+    '设计镜头语言...',
+    '标注动作和对话...',
+    '计算各镜头时长...',
+    '输出分镜脚本...',
+  ],
+  image_prompt_generator: [
+    '加载分镜数据...',
+    '分析场景氛围...',
+    '生成画面构图描述...',
+    '添加风格和细节提示...',
+    '输出英文提示词...',
+  ],
+};
+
+// Step descriptions for upcoming/placeholder panels
+const UPCOMING_STEP_INFO: Record<string, { title: string; description: string; icon: typeof ImageIcon; dependencies: string[]; dataPreview: (storyboards: Storyboard[], characters: Character[]) => { label: string; value: string }[] }> = {
+  video_gen: {
+    title: '视频生成',
+    description: '基于画面和视频提示词，AI 为每个分镜生成动态视频片段，实现画面的流动效果和转场动画',
+    icon: Video,
+    dependencies: ['画面提示词', '画面图片'],
+    dataPreview: (storyboards) => {
+      const withImages = storyboards.filter(s => s.composedImage).length;
+      const withPrompts = storyboards.filter(s => s.videoPrompt).length;
+      return [
+        { label: '总分镜数', value: `${storyboards.length}` },
+        { label: '已有画面', value: `${withImages}` },
+        { label: '已有视频提示词', value: `${withPrompts}` },
+      ];
+    },
+  },
+  tts: {
+    title: '配音合成',
+    description: '为每个分镜的对话内容生成语音配音，支持多种音色和情感表达，自动匹配角色配音方案',
+    icon: Music,
+    dependencies: ['角色配音方案', '分镜对话'],
+    dataPreview: (storyboards) => {
+      const withDialogue = storyboards.filter(s => s.dialogue).length;
+      return [
+        { label: '总分镜数', value: `${storyboards.length}` },
+        { label: '包含对话', value: `${withDialogue}` },
+        { label: '需要配音', value: `${withDialogue}` },
+      ];
+    },
+  },
+  compose: {
+    title: '成片合成',
+    description: '将每个分镜的画面、视频和配音合成为完整的分镜片段，添加字幕和转场效果',
+    icon: Link2,
+    dependencies: ['画面生成', '配音合成'],
+    dataPreview: (storyboards) => [
+      { label: '总分镜数', value: `${storyboards.length}` },
+      { label: '预计总时长', value: `${storyboards.reduce((a, s) => a + s.duration, 0)}秒` },
+    ],
+  },
+  merge: {
+    title: '集数合并',
+    description: '将所有分镜片段按顺序合并为完整的一集短剧，添加片头片尾和背景音乐',
+    icon: Package,
+    dependencies: ['成片合成'],
+    dataPreview: (storyboards) => [
+      { label: '总分镜数', value: `${storyboards.length}` },
+      { label: '预计总时长', value: `${storyboards.reduce((a, s) => a + s.duration, 0)}秒` },
+    ],
+  },
+  export: {
+    title: '导出完成',
+    description: '短剧制作流程已完成，可预览最终成果并导出为多种格式',
+    icon: Download,
+    dependencies: ['集数合并'],
+    dataPreview: (storyboards) => [
+      { label: '总分镜数', value: `${storyboards.length}` },
+      { label: '预计总时长', value: `${storyboards.reduce((a, s) => a + s.duration, 0)}秒` },
+    ],
+  },
 };
 
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
@@ -159,6 +267,8 @@ function getStepStatus(stepKey: string, episode: Episode, characters: Character[
       return characters.some(c => c.voiceStyle) ? 'done' : 'pending';
     case 'storyboard':
       return storyboards.length > 0 ? 'done' : 'pending';
+    case 'image_gen':
+      return storyboards.length > 0 && storyboards.every(s => s.imagePrompt) ? 'done' : 'pending';
     default:
       return 'pending';
   }
@@ -185,8 +295,21 @@ export default function EpisodeStudioView({
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
   const [selectedStoryboard, setSelectedStoryboard] = useState<Storyboard | null>(null);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [aiSteps, setAiSteps] = useState<{ text: string; done: boolean; elapsed: string }[]>([]);
+  const [aiProcessingDone, setAiProcessingDone] = useState(false);
 
   const mainContentRef = useRef<HTMLDivElement>(null);
+  const aiTimerRef = useRef<NodeJS.Timeout[]>([]);
+
+  const clearAiTimers = useCallback(() => {
+    aiTimerRef.current.forEach(t => clearTimeout(t));
+    aiTimerRef.current = [];
+  }, []);
+
+  // Cleanup timers on unmount
+  useEffect(() => {
+    return () => clearAiTimers();
+  }, [clearAiTimers]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -240,6 +363,54 @@ export default function EpisodeStudioView({
     }
   };
 
+  const startAiVisualization = useCallback((agentType: string) => {
+    const steps = AGENT_STEPS[agentType];
+    if (!steps || steps.length === 0) return;
+
+    clearAiTimers();
+    setAiSteps([]);
+    setAiProcessingDone(false);
+
+    // Show steps one by one with simulated timing
+    const delays = steps.map(() => {
+      return 600 + Math.random() * 1200; // 0.6s to 1.8s per step
+    });
+
+    let cumulativeDelay = 0;
+    const stepStartTimes: number[] = [];
+
+    steps.forEach((stepText, idx) => {
+      cumulativeDelay += delays[idx];
+      stepStartTimes.push(cumulativeDelay);
+
+      const timer = setTimeout(() => {
+        setAiSteps(prev => [
+          ...prev,
+          { text: stepText, done: false, elapsed: '' },
+        ]);
+
+        // Mark step as done after a short delay
+        const doneTimer = setTimeout(() => {
+          const elapsed = (delays[idx] / 1000).toFixed(1);
+          setAiSteps(prev =>
+            prev.map((s, i) =>
+              i === idx ? { ...s, done: true, elapsed: `${elapsed}s` } : s
+            )
+          );
+
+          // If last step, mark processing as done
+          if (idx === steps.length - 1) {
+            setTimeout(() => setAiProcessingDone(true), 300);
+          }
+        }, 200 + Math.random() * 400);
+
+        aiTimerRef.current.push(doneTimer);
+      }, cumulativeDelay);
+
+      aiTimerRef.current.push(timer);
+    });
+  }, [clearAiTimers]);
+
   const handleRunAgent = async (stepKey: string) => {
     const agentType = AGENT_TYPES[stepKey];
     if (!agentType) {
@@ -250,6 +421,9 @@ export default function EpisodeStudioView({
     setAgentLoading(stepKey);
     setShowResult(true);
     setAgentResult('');
+
+    // Start AI visualization
+    startAiVisualization(agentType);
 
     try {
       const res = await agentApi.run({
@@ -262,15 +436,26 @@ export default function EpisodeStudioView({
           ? '请从内容中提取所有角色信息'
           : stepKey === 'voice_assign'
           ? '请为所有角色分配合适的配音风格'
+          : stepKey === 'image_gen'
+          ? '请为每个分镜生成英文画面提示词'
           : '请将剧本拆解为分镜脚本',
       });
 
       const agentData = res.data || res;
+      // Clear AI visualization timers
+      clearAiTimers();
+      // Mark all remaining steps as done quickly
+      setAiSteps(prev =>
+        prev.map(s => s.done ? s : { ...s, done: true, elapsed: '0.1s' })
+      );
+      setAiProcessingDone(true);
+
       setAgentResult(agentData.result || agentData.output || agentData.message || JSON.stringify(agentData, null, 2));
       toast.success('Agent 执行完成');
       // Reload data
       await loadData();
     } catch (err) {
+      clearAiTimers();
       const msg = err instanceof Error ? err.message : 'Agent 执行失败';
       setAgentResult(`错误: ${msg}`);
       toast.error('Agent 执行失败');
@@ -409,6 +594,16 @@ export default function EpisodeStudioView({
                       hasAgent={!!AGENT_TYPES[step.key]}
                     />
 
+                    {/* AI Processing Visualization */}
+                    {agentLoading && aiSteps.length > 0 && (
+                      <AIProcessingPanel
+                        steps={aiSteps}
+                        totalSteps={AGENT_STEPS[AGENT_TYPES[step.key] || '']?.length || 0}
+                        done={aiProcessingDone}
+                        resultPreview={agentResult ? agentResult.slice(0, 200) : ''}
+                      />
+                    )}
+
                     {renderStepContent({
                       stepKey: step.key,
                       episode,
@@ -425,6 +620,9 @@ export default function EpisodeStudioView({
                       agentResult,
                       showResult,
                       setShowResult,
+                      dramaId,
+                      episodeId,
+                      loadData,
                     })}
                   </motion.div>
                 </AnimatePresence>
@@ -691,6 +889,95 @@ function StepHeader({
   );
 }
 
+// ==================== AI Processing Panel ====================
+function AIProcessingPanel({
+  steps,
+  totalSteps,
+  done,
+  resultPreview,
+}: {
+  steps: { text: string; done: boolean; elapsed: string }[];
+  totalSteps: number;
+  done: boolean;
+  resultPreview: string;
+}) {
+  const progressValue = totalSteps > 0 ? Math.round((steps.filter(s => s.done).length / totalSteps) * 100) : 0;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3 }}
+      className="mb-4"
+    >
+      <Card className="border-primary/20 bg-primary/[0.02] dark:bg-primary/[0.04]">
+        <CardContent className="p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <div className={`w-2 h-2 rounded-full ${done ? 'bg-green-500' : 'bg-amber-500 animate-pulse'}`} />
+            <span className="text-sm font-medium">
+              {done ? 'AI 处理完成' : 'AI 正在处理...'}
+            </span>
+          </div>
+
+          <div className="space-y-1.5 mb-3">
+            <AnimatePresence>
+              {steps.map((step, idx) => (
+                <motion.div
+                  key={idx}
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ duration: 0.25 }}
+                  className="flex items-center gap-2 text-sm"
+                >
+                  <span className="shrink-0">
+                    {step.done ? (
+                      <Check className="h-3.5 w-3.5 text-green-500" />
+                    ) : (
+                      <Loader2 className="h-3.5 w-3.5 text-primary animate-spin" />
+                    )}
+                  </span>
+                  <span className={`flex-1 ${step.done ? 'text-foreground/70' : 'text-foreground'}`}>
+                    {step.text}
+                  </span>
+                  {step.elapsed && (
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      {step.elapsed}
+                    </span>
+                  )}
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          </div>
+
+          {/* Progress bar */}
+          <div className="flex items-center gap-3">
+            <Progress value={progressValue} className="flex-1 h-2" />
+            <span className="text-xs text-muted-foreground tabular-nums font-medium">
+              {progressValue}%
+            </span>
+          </div>
+
+          {/* Result preview */}
+          {done && resultPreview && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              transition={{ duration: 0.3, delay: 0.2 }}
+              className="mt-3 pt-3 border-t"
+            >
+              <span className="text-xs text-muted-foreground block mb-1">结果预览:</span>
+              <p className="text-xs text-foreground/60 bg-muted/50 rounded-md p-2 line-clamp-3 leading-relaxed">
+                {resultPreview}
+                {resultPreview.length >= 200 ? '...' : ''}
+              </p>
+            </motion.div>
+          )}
+        </CardContent>
+      </Card>
+    </motion.div>
+  );
+}
+
 // ==================== Step Content Renderer ====================
 function renderStepContent(props: {
   stepKey: string;
@@ -708,6 +995,9 @@ function renderStepContent(props: {
   agentResult: string;
   showResult: boolean;
   setShowResult: (v: boolean) => void;
+  dramaId: string;
+  episodeId: string;
+  loadData: () => Promise<void>;
 }) {
   const { stepKey } = props;
 
@@ -1001,104 +1291,56 @@ function renderStepContent(props: {
         </div>
       );
 
-    // Steps 6-11: Placeholder panels
+    // ==================== Step 6: Image Generation (Full Functionality) ====================
     case 'image_gen':
       return (
-        <WorkInProgressPanel
-          icon={<ImageIcon className="h-12 w-12" />}
-          title="画面生成"
-          description="基于分镜的画面提示词，AI 自动生成每一帧画面"
-          items={props.storyboards.map((sb) => ({
-            id: sb.id,
-            title: `#${sb.storyboardNumber} ${sb.title || ''}`,
-            status: sb.composedImage ? 'done' : 'pending',
-            prompt: sb.imagePrompt,
-          }))}
+        <ImageGenPanel
+          storyboards={props.storyboards}
+          agentLoading={props.agentLoading}
+          loadData={props.loadData}
         />
       );
 
+    // ==================== Steps 7-10: Upcoming/Placeholder ====================
     case 'video_gen':
-      return (
-        <WorkInProgressPanel
-          icon={<Video className="h-12 w-12" />}
-          title="视频生成"
-          description="基于画面和视频提示词，生成动态视频片段"
-          items={props.storyboards.map((sb) => ({
-            id: sb.id,
-            title: `#${sb.storyboardNumber} ${sb.title || ''}`,
-            status: sb.videoUrl ? 'done' : 'pending',
-            prompt: sb.videoPrompt,
-          }))}
-        />
-      );
-
     case 'tts':
-      return (
-        <WorkInProgressPanel
-          icon={<Music className="h-12 w-12" />}
-          title="配音合成"
-          description="为每个分镜的对话生成语音配音"
-          items={props.storyboards.filter(s => s.dialogue).map((sb) => ({
-            id: sb.id,
-            title: `#${sb.storyboardNumber}`,
-            status: sb.ttsAudioUrl ? 'done' : 'pending',
-            prompt: sb.dialogue,
-          }))}
-        />
-      );
-
     case 'compose':
-      return <WorkInProgressPanel
-        icon={<Link2 className="h-12 w-12" />}
-        title="成片合成"
-        description="将画面、视频、配音合成为完整的分镜片段"
-        items={props.storyboards.map((sb) => ({
-          id: sb.id,
-          title: `#${sb.storyboardNumber}`,
-          status: sb.composedVideoUrl ? 'done' : 'pending',
-        }))}
-      />;
-
     case 'merge':
       return (
-        <Card>
-          <CardContent className="p-8 text-center">
-            <Package className="h-12 w-12 text-muted-foreground/30 mx-auto mb-3" />
-            <h3 className="text-lg font-medium">集数合并</h3>
-            <p className="text-sm text-muted-foreground mt-2">
-              将所有分镜片段按顺序合并为完整的一集短剧
-            </p>
-            <div className="mt-4 p-4 rounded-lg bg-muted/50 text-sm text-muted-foreground">
-              <p>共有 {props.storyboards.length} 个分镜待合并</p>
-              <p className="mt-1">预计总时长: {props.storyboards.reduce((a, s) => a + s.duration, 0)}秒</p>
-            </div>
-          </CardContent>
-        </Card>
+        <UpcomingStepPanel
+          stepKey={stepKey}
+          info={UPCOMING_STEP_INFO[stepKey]}
+          storyboards={props.storyboards}
+          characters={props.characters}
+        />
       );
 
+    // ==================== Step 11: Export ====================
     case 'export':
       return (
-        <Card>
-          <CardContent className="p-8 text-center">
-            <div className="w-16 h-16 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center mx-auto mb-3">
-              <Check className="h-8 w-8 text-green-600 dark:text-green-400" />
-            </div>
-            <h3 className="text-lg font-medium">导出完成</h3>
-            <p className="text-sm text-muted-foreground mt-2">
-              短剧制作流程已完成，可导出最终成果
-            </p>
-            <div className="flex gap-3 justify-center mt-6">
-              <Button variant="outline" className="gap-2">
-                <Eye className="h-4 w-4" />
-                预览
-              </Button>
-              <Button className="gap-2">
-                <Download className="h-4 w-4" />
-                导出
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+        <div className="space-y-4">
+          <Card>
+            <CardContent className="p-8 text-center">
+              <div className="w-16 h-16 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center mx-auto mb-3">
+                <Check className="h-8 w-8 text-green-600 dark:text-green-400" />
+              </div>
+              <h3 className="text-lg font-medium">导出完成</h3>
+              <p className="text-sm text-muted-foreground mt-2">
+                短剧制作流程已完成，可导出最终成果
+              </p>
+              <div className="flex gap-3 justify-center mt-6">
+                <Button variant="outline" className="gap-2">
+                  <Eye className="h-4 w-4" />
+                  预览
+                </Button>
+                <Button className="gap-2">
+                  <Download className="h-4 w-4" />
+                  导出
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       );
 
     default:
@@ -1106,57 +1348,361 @@ function renderStepContent(props: {
   }
 }
 
-// ==================== Work In Progress Panel ====================
-function WorkInProgressPanel({
-  icon,
-  title,
-  description,
-  items,
+// ==================== Image Generation Panel ====================
+function ImageGenPanel({
+  storyboards,
+  agentLoading,
+  loadData,
 }: {
-  icon: React.ReactNode;
-  title: string;
-  description: string;
-  items: { id: string; title: string; status: string; prompt?: string }[];
+  storyboards: Storyboard[];
+  agentLoading: boolean;
+  loadData: () => Promise<void>;
 }) {
-  const doneCount = items.filter(i => i.status === 'done').length;
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; generating: boolean }>({
+    current: 0,
+    total: 0,
+    generating: false,
+  });
+  // Compute initial statuses from storyboard data
+  const imageStatuses = useMemo<Record<string, 'pending' | 'generating' | 'completed' | 'failed'>>(() => {
+    const statuses: Record<string, 'pending' | 'generating' | 'completed' | 'failed'> = {};
+    storyboards.forEach(sb => {
+      statuses[sb.id] = sb.composedImage ? 'completed' : 'pending';
+    });
+    return statuses;
+  }, [storyboards]);
+
+  const handleGeneratePrompt = async () => {
+    // This is handled by the parent's handleRunAgent via StepHeader
+    toast.info('请点击上方「AI 处理」按钮生成画面提示词');
+  };
+
+  const handleBatchGenerate = () => {
+    toast.info('画面生成功能即将上线，敬请期待！');
+  };
+
+  const handleSingleGenerate = (sbId: string) => {
+    toast.info('画面生成功能即将上线，敬请期待！');
+  };
+
+  const completedCount = storyboards.filter(s => s.imagePrompt).length;
+  const imageCount = storyboards.filter(s => s.composedImage).length;
+
+  if (storyboards.length === 0) {
+    return (
+      <Card>
+        <CardContent className="p-8 text-center">
+          <ImageIcon className="h-12 w-12 text-muted-foreground/30 mx-auto mb-3" />
+          <p className="text-muted-foreground">暂无分镜数据</p>
+          <p className="text-sm text-muted-foreground/60 mt-1">
+            请先完成分镜拆解，然后再进行画面生成
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <div className="space-y-4">
+      {/* Summary & Action Bar */}
       <Card>
-        <CardContent className="p-6 text-center">
-          <div className="text-muted-foreground/30 mx-auto mb-3">{icon}</div>
-          <h3 className="text-lg font-medium">{title}</h3>
-          <p className="text-sm text-muted-foreground mt-2">{description}</p>
-          <div className="mt-4">
-            <div className="flex items-center justify-center gap-2 text-sm">
-              <Progress value={items.length > 0 ? (doneCount / items.length) * 100 : 0} className="w-32 h-2" />
-              <span className="text-muted-foreground">
-                {doneCount}/{items.length}
-              </span>
+        <CardContent className="p-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-4">
+              <div>
+                <p className="text-sm font-medium">
+                  共 {storyboards.length} 个分镜
+                </p>
+                <div className="flex items-center gap-3 mt-1">
+                  <span className="text-xs text-muted-foreground">
+                    提示词: {completedCount}/{storyboards.length}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    画面: {imageCount}/{storyboards.length}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleGeneratePrompt}
+                disabled={agentLoading || completedCount === storyboards.length}
+                className="gap-1.5"
+              >
+                <Wand2 className="h-3.5 w-3.5" />
+                AI生成提示词
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleBatchGenerate}
+                disabled={agentLoading || completedCount === 0}
+                className="gap-1.5"
+              >
+                <ImagePlus className="h-3.5 w-3.5" />
+                批量生成画面
+              </Button>
             </div>
           </div>
+
+          {/* Batch Progress */}
+          {batchProgress.generating && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              className="mt-3 pt-3 border-t"
+            >
+              <div className="flex items-center gap-2 text-sm mb-2">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                <span className="text-muted-foreground">
+                  正在生成 {batchProgress.current}/{batchProgress.total}
+                </span>
+              </div>
+              <Progress
+                value={batchProgress.total > 0 ? (batchProgress.current / batchProgress.total) * 100 : 0}
+                className="h-2"
+              />
+            </motion.div>
+          )}
         </CardContent>
       </Card>
 
-      {items.length > 0 && (
-        <div className="space-y-2 max-h-[400px] overflow-y-auto custom-scrollbar">
-          {items.map((item) => (
-            <Card key={item.id} className="bg-muted/30">
-              <CardContent className="p-3 flex items-center gap-3">
-                <div className={`w-2 h-2 rounded-full shrink-0 ${
-                  item.status === 'done'
-                    ? 'bg-green-500'
-                    : 'bg-muted-foreground/30'
-                }`} />
-                <span className="text-sm flex-1 truncate">{item.title}</span>
-                {item.prompt && (
-                  <span className="text-xs text-muted-foreground line-clamp-1 max-w-[200px] hidden sm:block">
-                    {item.prompt.slice(0, 40)}...
-                  </span>
-                )}
-              </CardContent>
-            </Card>
-          ))}
+      {/* Grid View */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {storyboards.map((sb, idx) => {
+          const status = imageStatuses[sb.id] || 'pending';
+          const statusInfo = {
+            pending: { label: '待处理', color: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400' },
+            generating: { label: '生成中', color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' },
+            completed: { label: '已完成', color: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' },
+            failed: { label: '失败', color: 'bg-red-100 text-red-700 dark:text-red-400' },
+          }[status];
+
+          return (
+            <motion.div
+              key={sb.id}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.2, delay: idx * 0.03 }}
+            >
+              <Card className="overflow-hidden h-full">
+                {/* Image Preview */}
+                <div className="aspect-video bg-muted/50 relative overflow-hidden">
+                  {sb.composedImage ? (
+                    <img
+                      src={sb.composedImage}
+                      alt={sb.title || `分镜 ${sb.storyboardNumber}`}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : sb.imagePrompt ? (
+                    <div className="w-full h-full flex items-center justify-center">
+                      <div className="text-center p-4">
+                        <ImageIcon className="h-8 w-8 text-muted-foreground/20 mx-auto mb-2" />
+                        <p className="text-xs text-muted-foreground/50">已生成提示词</p>
+                        <p className="text-xs text-muted-foreground/50 mt-0.5">待生成画面</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center">
+                      <div className="text-center p-4">
+                        <Layers className="h-8 w-8 text-muted-foreground/20 mx-auto mb-2" />
+                        <p className="text-xs text-muted-foreground/50">等待提示词生成</p>
+                      </div>
+                    </div>
+                  )}
+                  {/* Status overlay */}
+                  <div className="absolute top-2 left-2">
+                    <Badge className={`text-xs ${statusInfo.color}`}>
+                      {status === 'generating' && (
+                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                      )}
+                      {statusInfo.label}
+                    </Badge>
+                  </div>
+                  <div className="absolute top-2 right-2">
+                    <Badge variant="outline" className="text-xs bg-background/80 backdrop-blur-sm">
+                      #{sb.storyboardNumber}
+                    </Badge>
+                  </div>
+                </div>
+
+                {/* Content */}
+                <CardContent className="p-3">
+                  <h4 className="text-sm font-medium truncate mb-1.5">
+                    {sb.title || `分镜 ${sb.storyboardNumber}`}
+                  </h4>
+
+                  {/* Image Prompt */}
+                  {sb.imagePrompt ? (
+                    <div className="mb-2">
+                      <p className="text-xs text-muted-foreground mb-0.5">画面提示词</p>
+                      <p className="text-xs text-foreground/70 bg-muted/40 rounded p-1.5 line-clamp-2 leading-relaxed">
+                        {sb.imagePrompt}
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground/50 italic mb-2">
+                      暂无画面提示词
+                    </p>
+                  )}
+
+                  {/* Actions */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full text-xs gap-1.5"
+                    onClick={() => handleSingleGenerate(sb.id)}
+                    disabled={!sb.imagePrompt}
+                  >
+                    <ImagePlus className="h-3 w-3" />
+                    生成画面
+                  </Button>
+                </CardContent>
+              </Card>
+            </motion.div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ==================== Upcoming Step Panel ====================
+function UpcomingStepPanel({
+  stepKey,
+  info,
+  storyboards,
+  characters,
+}: {
+  stepKey: string;
+  info: {
+    title: string;
+    description: string;
+    icon: typeof ImageIcon;
+    dependencies: string[];
+    dataPreview: (storyboards: Storyboard[], characters: Character[]) => { label: string; value: string }[];
+  };
+  storyboards: Storyboard[];
+  characters: Character[];
+}) {
+  const IconComponent = info.icon;
+  const previewData = info.dataPreview(storyboards, characters);
+
+  return (
+    <div className="space-y-4">
+      {/* Main Info Card */}
+      <Card className="relative overflow-hidden">
+        {/* Coming Soon Badge */}
+        <div className="absolute top-3 right-3">
+          <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-xs border-0">
+            即将上线
+          </Badge>
         </div>
+
+        <CardContent className="p-6">
+          <div className="flex items-start gap-4">
+            <div className="w-12 h-12 rounded-xl bg-muted/50 flex items-center justify-center shrink-0 text-muted-foreground/50">
+              <IconComponent className="h-6 w-6" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h3 className="text-base font-semibold">{info.title}</h3>
+              <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
+                {info.description}
+              </p>
+            </div>
+          </div>
+
+          {/* Dependencies */}
+          <div className="mt-4 pt-4 border-t">
+            <p className="text-xs font-medium text-muted-foreground mb-2">前置依赖</p>
+            <div className="flex flex-wrap gap-2">
+              {info.dependencies.map((dep) => (
+                <Badge key={dep} variant="outline" className="text-xs">
+                  {dep}
+                </Badge>
+              ))}
+            </div>
+          </div>
+
+          {/* Data Preview */}
+          {previewData.length > 0 && (
+            <div className="mt-4 pt-4 border-t">
+              <p className="text-xs font-medium text-muted-foreground mb-2">数据预览</p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {previewData.map((item) => (
+                  <div key={item.label} className="bg-muted/30 rounded-lg p-3 text-center">
+                    <p className="text-lg font-semibold tabular-nums">{item.value}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{item.label}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Preview items list */}
+      {storyboards.length > 0 && stepKey !== 'merge' && stepKey !== 'export' && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">待处理分镜</CardTitle>
+          </CardHeader>
+          <CardContent className="p-3 pt-0">
+            <div className="space-y-1.5 max-h-[300px] overflow-y-auto custom-scrollbar">
+              {storyboards.map((sb) => {
+                let itemStatus: 'ready' | 'waiting' = 'waiting';
+                let statusLabel = '等待中';
+
+                if (stepKey === 'video_gen') {
+                  if (sb.composedImage) {
+                    itemStatus = 'ready';
+                    statusLabel = sb.videoUrl ? '已完成' : '可处理';
+                  }
+                } else if (stepKey === 'tts') {
+                  if (sb.dialogue) {
+                    itemStatus = 'ready';
+                    statusLabel = '可处理';
+                  }
+                } else if (stepKey === 'compose') {
+                  if (sb.composedImage) {
+                    itemStatus = 'ready';
+                    statusLabel = '可处理';
+                  }
+                }
+
+                return (
+                  <div
+                    key={sb.id}
+                    className="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm"
+                  >
+                    <div className={`w-2 h-2 rounded-full shrink-0 ${
+                      itemStatus === 'ready'
+                        ? 'bg-green-500'
+                        : 'bg-muted-foreground/20'
+                    }`} />
+                    <Badge variant="outline" className="text-xs font-mono shrink-0">
+                      #{sb.storyboardNumber}
+                    </Badge>
+                    <span className="flex-1 truncate text-sm">
+                      {sb.title || `分镜 ${sb.storyboardNumber}`}
+                    </span>
+                    <Badge
+                      variant="secondary"
+                      className={`text-xs shrink-0 ${
+                        itemStatus === 'ready'
+                          ? 'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400'
+                          : 'text-muted-foreground'
+                      }`}
+                    >
+                      {statusLabel}
+                    </Badge>
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
       )}
     </div>
   );
