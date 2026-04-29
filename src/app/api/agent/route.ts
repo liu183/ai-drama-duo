@@ -246,6 +246,31 @@ const AGENT_PROMPTS: Record<string, string> = {
 
 输出格式为JSON数组：
 [{"storyboardNumber":1,"imagePrompt":"cinematic shot, ...","negativePrompt":"blurry, low quality..."}]`,
+
+  video_prompt_generator: `你是一位专业的AI视频生成提示词专家。你需要为每个分镜生成高质量的视频提示词（用于图生视频/文生视频模型）。
+
+你会收到以下信息：
+1. 【分镜列表】- 每个分镜的具体内容（地点、动作、台词、氛围、镜头运动等）
+2. 【画面提示词】- 每个分镜已有的英文画面提示词（如果有）
+3. 【角色设定】- 每个角色的特征描述
+4. 【场景设定】- 每个场景的环境描述
+
+视频提示词与画面提示词的核心区别：
+- 画面提示词描述静态画面构图
+- 视频提示词描述动态运动、镜头变化、时间流逝
+
+生成要求：
+1. 描述画面的动态变化：人物动作、表情变化、物体运动
+2. 描述镜头运动：推拉摇移、慢动作、快放等
+3. 描述光影变化：光线如何随时间变化
+4. 如果有画面提示词，在其基础上增加动态描述
+5. 适配图生视频模式：以首帧画面为基础，描述如何过渡到下一个状态
+6. 每个提示词50-80个英文单词（视频模型提示词通常较短）
+7. 使用自然语言描述，避免过于技术化的参数
+8. 可选：描述推荐的视频参数，如运动幅度(motion_scale)、镜头速度(camera_speed)
+
+输出格式为JSON数组：
+[{"storyboardNumber":1,"videoPrompt":"slow camera push-in, woman turns her head gently, sunlight shifts through window...","motionScale":5,"cameraSpeed":"slow"}]`,
 };
 
 // POST /api/agent - Run an AI agent task
@@ -267,7 +292,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const validTypes = ['script_rewriter', 'extractor', 'storyboard_breaker', 'voice_assigner', 'image_prompt_generator'];
+    const validTypes = ['script_rewriter', 'extractor', 'storyboard_breaker', 'voice_assigner', 'image_prompt_generator', 'video_prompt_generator'];
     if (!validTypes.includes(agentType)) {
       return NextResponse.json(
         { error: `Invalid agentType. Must be one of: ${validTypes.join(', ')}` },
@@ -459,6 +484,122 @@ ${sceneContext || '暂无场景设定'}
 ${sbInfo}
 
 ${message || '请根据以上全局风格、角色设定、场景设定，为每个分镜生成英文画面提示词。'}
+        `;
+      }
+    }
+
+    // video_prompt_generator: load storyboards, characters, scenes for video prompt generation
+    if (agentType === 'video_prompt_generator') {
+      if (episodeId) {
+        // Load storyboards with character associations and image prompts
+        const storyboards = await db.storyboard.findMany({
+          where: { episodeId },
+          orderBy: { storyboardNumber: 'asc' },
+          select: {
+            storyboardNumber: true,
+            title: true,
+            location: true,
+            time: true,
+            shotType: true,
+            angle: true,
+            movement: true,
+            action: true,
+            result: true,
+            atmosphere: true,
+            dialogue: true,
+            description: true,
+            duration: true,
+            imagePrompt: true,
+            videoPrompt: true,
+            composedImage: true,
+            sceneId: true,
+            characters: {
+              select: {
+                character: {
+                  select: { id: true, name: true, appearance: true },
+                },
+              },
+            },
+          },
+        });
+
+        if (storyboards.length === 0) {
+          return NextResponse.json(
+            { error: '该集数还没有分镜数据，请先在第5步生成分镜' },
+            { status: 400 }
+          );
+        }
+
+        // Load all characters for this drama
+        const allCharacters = await db.character.findMany({
+          where: { dramaId },
+          select: { id: true, name: true, appearance: true },
+        });
+
+        // Load all scenes for this drama
+        const allScenes = await db.scene.findMany({
+          where: { dramaId },
+          select: { id: true, location: true, prompt: true },
+        });
+
+        // Build character context
+        function parseCharAppearance(raw: string): { text?: string; promptEn?: string } {
+          if (!raw) return {};
+          try {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') return parsed;
+            return { text: raw };
+          } catch {
+            return { text: raw };
+          }
+        }
+
+        const characterContext = allCharacters.map(c => {
+          const app = parseCharAppearance(c.appearance);
+          return `角色名: ${c.name} - 描述: ${app.promptEn || app.text || '无'}`;
+        }).join('\n');
+
+        // Build scene context
+        function parseScenePrompt(raw: string): { text?: string; promptEn?: string } {
+          if (!raw) return {};
+          try {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') return parsed;
+            return { text: raw };
+          } catch {
+            return { text: raw };
+          }
+        }
+
+        const sceneContext = allScenes.map(s => {
+          const sp = parseScenePrompt(s.prompt);
+          return `场景: ${s.location} - 描述: ${sp.promptEn || sp.text || '无'}`;
+        }).join('\n');
+
+        // Build storyboard context
+        const sbInfo = storyboards.map(sb => {
+          const charNames = sb.characters.map(sc => sc.character.name).join(', ');
+          const hasImage = !!sb.composedImage || !!sb.imagePrompt;
+          return `分镜#${sb.storyboardNumber} "${sb.title || ''}"
+  地点: ${sb.location} | 时间: ${sb.time} | 镜头: ${sb.shotType} | 角度: ${sb.angle} | 运动: ${sb.movement}
+  动作: ${sb.action} | 结果: ${sb.result} | 氛围: ${sb.atmosphere}
+  台词: ${sb.dialogue} | 描述: ${sb.description} | 时长: ${sb.duration}秒
+  出场角色: ${charNames || '无'}
+  已有画面提示词: ${sb.imagePrompt || '无'}
+  已有画面图片: ${hasImage ? '有（可作首帧参考）' : '无'}
+  已有视频提示词: ${sb.videoPrompt || '无'}`;
+        }).join('\n---\n');
+
+        contextMessage = `【角色设定】
+${characterContext || '暂无角色设定'}
+
+【场景设定】
+${sceneContext || '暂无场景设定'}
+
+【分镜列表】共${storyboards.length}个分镜
+${sbInfo}
+
+${message || '请根据以上分镜信息，为每个分镜生成英文视频提示词（用于图生视频模型）。注意：视频提示词要描述动态运动和镜头变化，而非静态画面。已有画面提示词的分镜，请在画面提示词基础上增加运动描述。'}
         `;
       }
     }
@@ -668,6 +809,42 @@ ${message || '请根据以上全局风格、角色设定、场景设定，为每
           processedResult = {
             updatedCount: updateResults.filter(Boolean).length,
             prompts,
+          };
+        } else {
+          processedResult = { rawResult: result, updatedCount: 0 };
+        }
+        break;
+      }
+
+      case 'video_prompt_generator': {
+        // Parse the returned video prompts and save to storyboards
+        const videoPrompts = extractJSON(result);
+        if (videoPrompts && videoPrompts.length > 0 && episodeId) {
+          const updateResults = await Promise.all(
+            videoPrompts.map(async (p: Record<string, unknown>) => {
+              const sbNum = p.storyboardNumber as number;
+              const vprompt = (p.videoPrompt as string) || '';
+              if (!sbNum || !vprompt) return null;
+
+              const updateData: Record<string, unknown> = { videoPrompt: vprompt };
+              // Also save motionScale and cameraSpeed as metadata in videoPrompt if provided
+              const extras: string[] = [];
+              if (p.motionScale) extras.push(`motion_scale=${p.motionScale}`);
+              if (p.cameraSpeed) extras.push(`camera_speed=${p.cameraSpeed}`);
+              if (extras.length > 0) {
+                updateData.videoPrompt = `${vprompt} [${extras.join(', ')}]`;
+              }
+
+              return db.storyboard.updateMany({
+                where: { episodeId, storyboardNumber: sbNum },
+                data: updateData,
+              });
+            })
+          );
+
+          processedResult = {
+            updatedCount: updateResults.filter(Boolean).length,
+            videoPrompts,
           };
         } else {
           processedResult = { rawResult: result, updatedCount: 0 };
