@@ -106,7 +106,7 @@ const STYLE_LABELS: Record<string, string> = {
 };
 
 // ==================== Component ====================
-export default function DramaListView({ onSelectDrama }: DramaListProps) {
+export default function DramaListView({ onSelectDrama, refreshKey }: DramaListProps) {
   const [dramas, setDramas] = useState<DramaItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -139,7 +139,7 @@ export default function DramaListView({ onSelectDrama }: DramaListProps) {
 
   useEffect(() => {
     loadDramas();
-  }, [loadDramas]);
+  }, [loadDramas, refreshKey]);
 
   const handleCreate = async () => {
     if (!createForm.title.trim()) {

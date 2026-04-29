@@ -420,6 +420,7 @@ export default function DramaDetailView({
   dramaId,
   onBack,
   onEnterStudio,
+  refreshKey,
 }: DramaDetailProps) {
   const [drama, setDrama] = useState<DramaDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -478,7 +479,7 @@ export default function DramaDetailView({
 
   useEffect(() => {
     loadDrama();
-  }, [loadDrama]);
+  }, [loadDrama, refreshKey]);
 
   const handleSaveInfo = async () => {
     setSaving(true);

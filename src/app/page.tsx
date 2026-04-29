@@ -42,11 +42,12 @@ export default function HomePage() {
   const { theme, setTheme } = useTheme();
 
   const navigateToList = useCallback(() => {
-    setView({ type: 'list' });
     setRefreshKey((k) => k + 1);
+    setView({ type: 'list' });
   }, []);
 
   const navigateToDrama = useCallback((dramaId: string) => {
+    setRefreshKey((k) => k + 1);
     setView({ type: 'drama', id: dramaId });
   }, []);
 
@@ -133,7 +134,7 @@ export default function HomePage() {
         <main className="flex-1">
           <AnimatePresence mode="wait">
             <motion.div
-              key={view.type + (view.type === 'drama' ? view.id : '') + (view.type === 'studio' ? view.episodeId : '')}
+              key={refreshKey + '-' + view.type + (view.type === 'drama' ? view.id : '') + (view.type === 'studio' ? view.episodeId : '')}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
