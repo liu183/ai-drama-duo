@@ -225,16 +225,27 @@ const AGENT_PROMPTS: Record<string, string> = {
 可用配音风格：温柔女声/霸道男声/少女音/正太音/御姐音/大叔音/清冷女声/沙哑男声/磁性男声/甜美女声
 输出格式（JSON数组）：[{"name":"角色名","voiceStyle":"配音风格","voiceProvider":"default"}]`,
 
-  image_prompt_generator: `你是一位专业的AI画面提示词专家。你的任务是根据分镜脚本的内容，为每个分镜生成高质量的英文画面提示词（用于AI绘图）。
-要求：
-1. 提示词必须是英文
-2. 包含场景、人物、动作、氛围、光影等描述
-3. 风格统一为"cinematic, high quality, detailed"
-4. 每个提示词50-100个英文单词
-5. 保持人物外貌和服装的一致性
+  image_prompt_generator: `你是一位专业的AI画面提示词专家。你需要为每个分镜生成高质量的画面提示词。
+
+你会收到以下信息：
+1. 【全局风格配置】- 包括画面比例、质量关键词、风格前缀、排除项
+2. 【角色设定】- 每个角色的英文外貌描述、种子值、参考图信息
+3. 【场景设定】- 每个场景的英文环境描述
+4. 【分镜列表】- 每个分镜的具体内容（地点、动作、台词、氛围等）
+5. 【角色出场信息】- 每个分镜中出场的角色
+
+生成要求：
+1. 提示词必须以全局风格前缀开头
+2. 包含出场角色的外貌描述（必须使用角色设定中提供的英文描述，保持一致性）
+3. 包含场景环境描述（必须使用场景设定中提供的英文描述）
+4. 描述角色在当前场景中的具体动作和表情
+5. 如果角色有种子值，在提示词末尾添加 "--seed {seedValue}"
+6. 每个提示词80-120个英文单词
+7. 在提示词末尾加上质量关键词（排除项不要写在提示词中，单独在negativePrompt字段中）
+8. 保持人物外貌和服装在不同分镜间完全一致
 
 输出格式为JSON数组：
-[{"storyboardNumber":1,"imagePrompt":"cinematic shot, ..."}]`,
+[{"storyboardNumber":1,"imagePrompt":"cinematic shot, ...","negativePrompt":"blurry, low quality..."}]`,
 };
 
 // POST /api/agent - Run an AI agent task
@@ -310,25 +321,145 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // image_prompt_generator: load storyboards for prompt generation
+    // image_prompt_generator: load storyboards, characters, scenes, and style config for prompt generation
     if (agentType === 'image_prompt_generator') {
       if (episodeId) {
+        // Load storyboards with character associations
         const storyboards = await db.storyboard.findMany({
           where: { episodeId },
           orderBy: { storyboardNumber: 'asc' },
-          select: { storyboardNumber: true, title: true, location: true, time: true, shotType: true, angle: true, action: true, atmosphere: true, dialogue: true, description: true },
+          select: {
+            storyboardNumber: true,
+            title: true,
+            location: true,
+            time: true,
+            shotType: true,
+            angle: true,
+            action: true,
+            atmosphere: true,
+            dialogue: true,
+            description: true,
+            sceneId: true,
+            characters: {
+              select: {
+                character: {
+                  select: { id: true, name: true, appearance: true, seedValue: true, imageUrl: true, referenceImages: true },
+                },
+              },
+            },
+          },
         });
-        if (storyboards.length > 0) {
-          const sbInfo = storyboards.map(sb =>
-            `分镜#${sb.storyboardNumber} "${sb.title || ''}" | 地点:${sb.location} 时间:${sb.time} 镜头:${sb.shotType} 角度:${sb.angle} 动作:${sb.action} 氛围:${sb.atmosphere} 台词:${sb.dialogue} 描述:${sb.description}`
-          ).join('\n---\n');
-          contextMessage = `共${storyboards.length}个分镜，请为每个分镜生成英文画面提示词：\n\n${sbInfo}\n\n${message || '请为每个分镜生成英文画面提示词。'}`;
-        } else {
+
+        if (storyboards.length === 0) {
           return NextResponse.json(
             { error: '该集数还没有分镜数据，请先在第5步生成分镜' },
             { status: 400 }
           );
         }
+
+        // Load drama metadata for global style config
+        const dramaWithMeta = await db.drama.findUnique({
+          where: { id: dramaId },
+          select: { metadata: true, style: true },
+        });
+
+        // Parse style config
+        let styleConfig = {
+          aspectRatio: '16:9',
+          qualityKeywords: '8K UHD, masterpiece, best quality, ultra detailed',
+          negativePrompts: 'blurry, low quality, watermark, text, distorted face, extra fingers',
+          stylePromptPrefix: 'cinematic, dramatic lighting, film grain, shallow depth of field',
+        };
+        if (dramaWithMeta?.metadata) {
+          try {
+            const meta = JSON.parse(dramaWithMeta.metadata);
+            if (meta.imageStyle) {
+              styleConfig = { ...styleConfig, ...meta.imageStyle };
+            }
+          } catch { /* ignore */ }
+        }
+
+        // Load all characters for this drama
+        const allCharacters = await db.character.findMany({
+          where: { dramaId },
+          select: { id: true, name: true, appearance: true, seedValue: true, imageUrl: true, referenceImages: true },
+        });
+
+        // Load all scenes for this drama
+        const allScenes = await db.scene.findMany({
+          where: { dramaId },
+          select: { id: true, location: true, prompt: true, imageUrl: true },
+        });
+
+        // Build character context
+        function parseCharAppearance(raw: string): { text?: string; promptEn?: string } {
+          if (!raw) return {};
+          try {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') return parsed;
+            return { text: raw };
+          } catch {
+            return { text: raw };
+          }
+        }
+
+        function parseScenePrompt(raw: string): { text?: string; promptEn?: string } {
+          if (!raw) return {};
+          try {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') return parsed;
+            return { text: raw };
+          } catch {
+            return { text: raw };
+          }
+        }
+
+        const characterContext = allCharacters.map(c => {
+          const app = parseCharAppearance(c.appearance);
+          const hasRef = !!c.imageUrl || (c.referenceImages && JSON.parse(c.referenceImages || '[]').length > 0);
+          return `角色名: ${c.name}
+- 英文描述: ${app.promptEn || app.text || '无'}
+- 种子值: ${c.seedValue || '未设置'}
+- 参考图: ${hasRef ? '已提供参考图' : '无'}`;
+        }).join('\n\n');
+
+        // Build scene context
+        const sceneContext = allScenes.map(s => {
+          const sp = parseScenePrompt(s.prompt);
+          return `场景: ${s.location}
+- 英文描述: ${sp.promptEn || sp.text || '无'}
+- 参考图: ${s.imageUrl ? '已提供参考图' : '无'}`;
+        }).join('\n\n');
+
+        // Build storyboard context with character associations
+        const sbInfo = storyboards.map(sb => {
+          const charNames = sb.characters.map(sc => sc.character.name).join(', ');
+          const sbLocation = sb.location || '';
+          return `分镜#${sb.storyboardNumber} "${sb.title || ''}"
+  地点: ${sbLocation} | 时间: ${sb.time} | 镜头: ${sb.shotType} | 角度: ${sb.angle}
+  动作: ${sb.action} | 氛围: ${sb.atmosphere}
+  台词: ${sb.dialogue} | 描述: ${sb.description}
+  出场角色: ${charNames || '无'}
+  场景ID: ${sb.sceneId || '未关联'}`;
+        }).join('\n---\n');
+
+        contextMessage = `【全局风格】
+- 画面比例: ${styleConfig.aspectRatio}
+- 质量关键词: ${styleConfig.qualityKeywords}
+- 风格前缀: ${styleConfig.stylePromptPrefix}
+- 排除项: ${styleConfig.negativePrompts}
+
+【角色设定】
+${characterContext || '暂无角色设定'}
+
+【场景设定】
+${sceneContext || '暂无场景设定'}
+
+【分镜列表】共${storyboards.length}个分镜
+${sbInfo}
+
+${message || '请根据以上全局风格、角色设定、场景设定，为每个分镜生成英文画面提示词。'}
+        `;
       }
     }
 

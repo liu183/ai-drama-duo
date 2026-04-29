@@ -4,23 +4,31 @@ Agent: main
 Task: Add prompt copy-to-clipboard and external image upload features for storyboard step
 
 Work Log:
-- Read and analyzed episode-studio.tsx (1709 lines) to understand the ImageGenPanel component
-- Identified storyboard API route supports composedImage field update
 - Added Copy, Upload, X icons from lucide-react
-- Implemented copyToClipboard() utility with clipboard API + fallback
-- Implemented fileToBase64() utility for image upload
-- Rewrote ImageGenPanel component with:
-  - Copy button on each storyboard's image prompt
-  - Click-on-text to copy prompt
-  - File input + drag-and-drop image upload
-  - Hover overlay on uploaded images with replace/remove actions
-  - File validation (type + 10MB size limit)
-  - Upload progress indicator
-- Fixed duplicate Check import in lucide-react
-- Built successfully with `npx next build`
-- Deployed to Vercel production via CLI
+- Implemented copyToClipboard() and fileToBase64() utilities
+- Rewrote ImageGenPanel with copy-on-click, drag-drop upload, hover actions
+- Fixed duplicate Check import
+- Built and deployed to Vercel
 
 Stage Summary:
-- All features implemented and deployed
 - Production URL: https://huobao-drama-v2.vercel.app
-- Build: ✓ Compiled successfully
+---
+Task ID: 2
+Agent: full-stack-developer
+Task: Implement core asset management system for character/scene consistency
+
+Work Log:
+- Enhanced Character Dialog: reference image upload (main + 3 additional), seed value, structured visual attributes (gender/age/hair/eyes/skin/body/clothing/distinguishing), AI-generate English description button
+- Enhanced Character Cards: show reference image, seed badge, reference images badge
+- Enhanced Scene Dialog: reference image upload, environment attributes (type/architecture/lighting/weather/season/colorTone/keyProps), AI-generate English description
+- Enhanced Scene Cards: reference image preview, edit button
+- Added Global Style Config in Overview Tab: aspect ratio selector, quality keywords, style prefix, negative prompts, reset defaults
+- Enhanced image_prompt_generator Agent: loads drama metadata, characters, scenes, storyboard-character associations; composes rich context with style config, character visual descriptions, scene environment descriptions
+- Backward compatible with existing plain-text data
+- Build passed, deployed to Vercel production
+
+Stage Summary:
+- All core asset management features implemented
+- drama-detail.tsx: 822 → 1824 lines
+- agent/route.ts: 583 → 713 lines
+- Production: https://huobao-drama-v2.vercel.app
