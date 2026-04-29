@@ -33,6 +33,9 @@ import {
   Wand2,
   Layers,
   ImagePlus,
+  Copy,
+  Upload,
+  X,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -55,6 +58,41 @@ import {
   storyboardApi,
   agentApi,
 } from '@/lib/api';
+
+// ==================== Copy to Clipboard Utility ====================
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Fallback for non-HTTPS environments
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      document.execCommand('copy');
+      return true;
+    } catch {
+      return false;
+    } finally {
+      document.body.removeChild(textarea);
+    }
+  }
+}
+
+// ==================== File to Base64 Utility ====================
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 import { toast } from 'sonner';
 
 // ==================== Types ====================
@@ -1363,17 +1401,21 @@ function ImageGenPanel({
     total: 0,
     generating: false,
   });
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [uploadingId, setUploadingId] = useState<string | null>(null);
+  const [uploadedImages, setUploadedImages] = useState<Record<string, string>>({});
+  const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+
   // Compute initial statuses from storyboard data
   const imageStatuses = useMemo<Record<string, 'pending' | 'generating' | 'completed' | 'failed'>>(() => {
     const statuses: Record<string, 'pending' | 'generating' | 'completed' | 'failed'> = {};
     storyboards.forEach(sb => {
-      statuses[sb.id] = sb.composedImage ? 'completed' : 'pending';
+      statuses[sb.id] = (sb.composedImage || uploadedImages[sb.id]) ? 'completed' : 'pending';
     });
     return statuses;
-  }, [storyboards]);
+  }, [storyboards, uploadedImages]);
 
   const handleGeneratePrompt = async () => {
-    // This is handled by the parent's handleRunAgent via StepHeader
     toast.info('请点击上方「AI 处理」按钮生成画面提示词');
   };
 
@@ -1385,8 +1427,108 @@ function ImageGenPanel({
     toast.info('画面生成功能即将上线，敬请期待！');
   };
 
+  const handleCopyPrompt = async (sbId: string, prompt: string) => {
+    const success = await copyToClipboard(prompt);
+    if (success) {
+      setCopiedId(sbId);
+      toast.success('提示词已复制到剪贴板');
+      setTimeout(() => setCopiedId(null), 2000);
+    } else {
+      toast.error('复制失败，请手动选择复制');
+    }
+  };
+
+  const handleUploadClick = (sbId: string) => {
+    fileInputRefs.current[sbId]?.click();
+  };
+
+  const handleFileChange = async (sbId: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      toast.error('请选择图片文件');
+      return;
+    }
+
+    // Validate file size (max 10MB for base64 storage)
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('图片大小不能超过 10MB');
+      return;
+    }
+
+    setUploadingId(sbId);
+    try {
+      const base64 = await fileToBase64(file);
+
+      // Update the storyboard's composedImage via API
+      await storyboardApi.update(sbId, { composedImage: base64 });
+
+      // Update local state
+      setUploadedImages(prev => ({ ...prev, [sbId]: base64 }));
+      toast.success('图片上传成功');
+      await loadData();
+    } catch (err) {
+      toast.error('图片上传失败，请重试');
+      console.error('Upload error:', err);
+    } finally {
+      setUploadingId(null);
+      // Reset file input
+      if (fileInputRefs.current[sbId]) {
+        fileInputRefs.current[sbId]!.value = '';
+      }
+    }
+  };
+
+  const handleRemoveImage = async (sbId: string) => {
+    try {
+      await storyboardApi.update(sbId, { composedImage: '' });
+      setUploadedImages(prev => {
+        const next = { ...prev };
+        delete next[sbId];
+        return next;
+      });
+      toast.success('图片已移除');
+      await loadData();
+    } catch {
+      toast.error('移除图片失败');
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = async (sbId: string, e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const file = e.dataTransfer.files?.[0];
+    if (!file || !file.type.startsWith('image/')) {
+      toast.error('请拖放图片文件');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('图片大小不能超过 10MB');
+      return;
+    }
+    setUploadingId(sbId);
+    try {
+      const base64 = await fileToBase64(file);
+      await storyboardApi.update(sbId, { composedImage: base64 });
+      setUploadedImages(prev => ({ ...prev, [sbId]: base64 }));
+      toast.success('图片上传成功');
+      await loadData();
+    } catch {
+      toast.error('图片上传失败，请重试');
+    } finally {
+      setUploadingId(null);
+    }
+  };
+
   const completedCount = storyboards.filter(s => s.imagePrompt).length;
-  const imageCount = storyboards.filter(s => s.composedImage).length;
+  const imageCount = storyboards.filter(s => s.composedImage || uploadedImages[s.id]).length;
 
   if (storyboards.length === 0) {
     return (
@@ -1479,6 +1621,10 @@ function ImageGenPanel({
             failed: { label: '失败', color: 'bg-red-100 text-red-700 dark:text-red-400' },
           }[status];
 
+          const displayImage = uploadedImages[sb.id] || sb.composedImage;
+          const isUploading = uploadingId === sb.id;
+          const isCopied = copiedId === sb.id;
+
           return (
             <motion.div
               key={sb.id}
@@ -1487,20 +1633,65 @@ function ImageGenPanel({
               transition={{ duration: 0.2, delay: idx * 0.03 }}
             >
               <Card className="overflow-hidden h-full">
-                {/* Image Preview */}
-                <div className="aspect-video bg-muted/50 relative overflow-hidden">
-                  {sb.composedImage ? (
-                    <img
-                      src={sb.composedImage}
-                      alt={sb.title || `分镜 ${sb.storyboardNumber}`}
-                      className="w-full h-full object-cover"
-                    />
+                {/* Image Preview / Upload Area */}
+                <div
+                  className={`aspect-video bg-muted/50 relative overflow-hidden ${!displayImage ? 'cursor-pointer' : ''}`}
+                  onClick={() => !displayImage && handleUploadClick(sb.id)}
+                  onDragOver={handleDragOver}
+                  onDrop={(e) => handleDrop(sb.id, e)}
+                >
+                  {isUploading ? (
+                    <div className="w-full h-full flex items-center justify-center bg-muted/30">
+                      <div className="text-center">
+                        <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-2" />
+                        <p className="text-xs text-muted-foreground">上传中...</p>
+                      </div>
+                    </div>
+                  ) : displayImage ? (
+                    <>
+                      <img
+                        src={displayImage}
+                        alt={sb.title || `分镜 ${sb.storyboardNumber}`}
+                        className="w-full h-full object-cover"
+                      />
+                      {/* Hover overlay with actions */}
+                      <div className="absolute inset-0 bg-black/0 hover:bg-black/30 transition-colors group">
+                        <div className="absolute bottom-2 right-2 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="secondary"
+                                size="icon"
+                                className="h-7 w-7 bg-background/90 hover:bg-background"
+                                onClick={(e) => { e.stopPropagation(); handleUploadClick(sb.id); }}
+                              >
+                                <Upload className="h-3.5 w-3.5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>替换图片</TooltipContent>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="secondary"
+                                size="icon"
+                                className="h-7 w-7 bg-background/90 hover:bg-destructive"
+                                onClick={(e) => { e.stopPropagation(); handleRemoveImage(sb.id); }}
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>移除图片</TooltipContent>
+                          </Tooltip>
+                        </div>
+                      </div>
+                    </>
                   ) : sb.imagePrompt ? (
                     <div className="w-full h-full flex items-center justify-center">
                       <div className="text-center p-4">
-                        <ImageIcon className="h-8 w-8 text-muted-foreground/20 mx-auto mb-2" />
-                        <p className="text-xs text-muted-foreground/50">已生成提示词</p>
-                        <p className="text-xs text-muted-foreground/50 mt-0.5">待生成画面</p>
+                        <Upload className="h-8 w-8 text-muted-foreground/20 mx-auto mb-2" />
+                        <p className="text-xs text-muted-foreground/50">点击或拖放上传图片</p>
+                        <p className="text-xs text-muted-foreground/40 mt-0.5">支持 JPG / PNG / WebP</p>
                       </div>
                     </div>
                   ) : (
@@ -1525,6 +1716,14 @@ function ImageGenPanel({
                       #{sb.storyboardNumber}
                     </Badge>
                   </div>
+                  {/* Hidden file input */}
+                  <input
+                    ref={(el) => { fileInputRefs.current[sb.id] = el; }}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/gif"
+                    className="hidden"
+                    onChange={(e) => handleFileChange(sb.id, e)}
+                  />
                 </div>
 
                 {/* Content */}
@@ -1533,11 +1732,42 @@ function ImageGenPanel({
                     {sb.title || `分镜 ${sb.storyboardNumber}`}
                   </h4>
 
-                  {/* Image Prompt */}
+                  {/* Image Prompt with Copy Button */}
                   {sb.imagePrompt ? (
                     <div className="mb-2">
-                      <p className="text-xs text-muted-foreground mb-0.5">画面提示词</p>
-                      <p className="text-xs text-foreground/70 bg-muted/40 rounded p-1.5 line-clamp-2 leading-relaxed">
+                      <div className="flex items-center justify-between mb-0.5">
+                        <p className="text-xs text-muted-foreground">画面提示词</p>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              onClick={() => handleCopyPrompt(sb.id, sb.imagePrompt)}
+                              className={`flex items-center gap-1 text-xs px-1.5 py-0.5 rounded transition-colors ${
+                                isCopied
+                                  ? 'text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30'
+                                  : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                              }`}
+                            >
+                              {isCopied ? (
+                                <>
+                                  <Check className="h-3 w-3" />
+                                  已复制
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="h-3 w-3" />
+                                  复制
+                                </>
+                              )}
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent>{isCopied ? '已复制' : '点击复制提示词'}</TooltipContent>
+                        </Tooltip>
+                      </div>
+                      <p
+                        className="text-xs text-foreground/70 bg-muted/40 rounded p-1.5 line-clamp-2 leading-relaxed cursor-pointer hover:bg-muted/60 transition-colors"
+                        onClick={() => handleCopyPrompt(sb.id, sb.imagePrompt)}
+                        title="点击复制提示词"
+                      >
                         {sb.imagePrompt}
                       </p>
                     </div>
@@ -1548,16 +1778,33 @@ function ImageGenPanel({
                   )}
 
                   {/* Actions */}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="w-full text-xs gap-1.5"
-                    onClick={() => handleSingleGenerate(sb.id)}
-                    disabled={!sb.imagePrompt}
-                  >
-                    <ImagePlus className="h-3 w-3" />
-                    生成画面
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1 text-xs gap-1.5"
+                      onClick={() => handleSingleGenerate(sb.id)}
+                      disabled={!sb.imagePrompt}
+                    >
+                      <ImagePlus className="h-3 w-3" />
+                      生成画面
+                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="text-xs gap-1.5"
+                          onClick={() => handleUploadClick(sb.id)}
+                          disabled={isUploading}
+                        >
+                          <Upload className="h-3 w-3" />
+                          上传
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>上传外部生成的图片</TooltipContent>
+                    </Tooltip>
+                  </div>
                 </CardContent>
               </Card>
             </motion.div>
