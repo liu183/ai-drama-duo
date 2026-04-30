@@ -1,6 +1,6 @@
 // ============================================================================
 // 笔境 AI - Database Client
-// 本地开发: SQLite (Prisma Client)
+// 本地开发: SQLite (Prisma Client via schema.prisma)
 // Vercel 部署: PostgreSQL (Neon) via POSTGRES_PRISMA_URL (含 pgbouncer 连接池)
 // ============================================================================
 
@@ -14,22 +14,29 @@ const globalForPrisma = globalThis as unknown as {
  * 获取数据库 URL
  *
  * Vercel Postgres 自动设置以下环境变量：
- * - POSTGRES_PRISMA_URL    → Prisma 专用（含 pgbouncer），优先使用
- * - POSTGRES_URL           → 通用池化连接
- * - POSTGRES_URL_NON_POOLING → 直连（用于迁移）
- * - DATABASE_URL           → 通常等于 POSTGRES_PRISMA_URL
+ * - POSTGRES_PRISMA_URL        → Prisma 专用（含 pgbouncer），优先使用
+ * - POSTGRES_URL               → 通用池化连接
+ * - POSTGRES_URL_NON_POOLING   → 直连（用于迁移）
+ * - DATABASE_URL               → 本地开发使用
  */
 function getDatabaseUrl(): string {
-  // 优先使用 Vercel 自动设置的 Prisma 专用 URL
+  // 优先使用 Vercel 自动设置的 Prisma 专用 URL（含 pgbouncer 连接池）
   const prismaUrl = process.env.POSTGRES_PRISMA_URL;
   if (prismaUrl) {
     return prismaUrl;
   }
 
+  // 备用：使用通用 PostgreSQL URL
+  const postgresUrl = process.env.POSTGRES_URL;
+  if (postgresUrl) {
+    return postgresUrl;
+  }
+
+  // 本地开发使用 DATABASE_URL
   const url = process.env.DATABASE_URL;
   if (!url) {
     throw new Error(
-      'DATABASE_URL 环境变量未设置。请在 .env.local 文件中配置 DATABASE_URL。'
+      'DATABASE_URL 环境变量未设置。请在 .env 文件中配置 DATABASE_URL。'
     );
   }
   return url;
@@ -45,8 +52,12 @@ function isPostgresUrl(url: string): boolean {
 /**
  * 创建 PrismaClient 实例
  *
- * - 本地开发: 使用 SQLite，标准 Prisma Client
- * - Vercel 部署: 使用 PostgreSQL (Neon)，通过 pgbouncer 连接池
+ * - 本地开发: 使用 SQLite（schema.prisma），标准 Prisma Client
+ * - Vercel 部署: 使用 PostgreSQL（schema.postgres.prisma），通过 pgbouncer 连接池
+ *
+ * 注意：Vercel 部署时 vercel.json 中 buildCommand 会先执行
+ *   prisma generate --schema=prisma/schema.postgres.prisma
+ * 所以运行时 @prisma/client 始终基于正确的 schema 生成
  */
 function createPrismaClient(): PrismaClient {
   const databaseUrl = getDatabaseUrl();
@@ -70,12 +81,12 @@ function createPrismaClient(): PrismaClient {
   console.log('[DB] Using SQLite (local development)');
 
   return new PrismaClient({
-    log: ['query', 'error', 'warn'],
+    log: ['error', 'warn'],
   });
 }
 
 // ============================================================================
-// 导出单例
+// 导出单例 — 确保开发模式下热重载不会创建多个连接
 // ============================================================================
 
 export const db = globalForPrisma.prisma ?? createPrismaClient();
@@ -99,7 +110,7 @@ export async function checkDatabaseHealth(): Promise<{
   error?: string;
 }> {
   const isVercel = !!process.env.VERCEL;
-  const databaseUrl = process.env.POSTGRES_PRISMA_URL || process.env.DATABASE_URL || '';
+  const databaseUrl = process.env.POSTGRES_PRISMA_URL || process.env.POSTGRES_URL || process.env.DATABASE_URL || '';
   const isPostgres = isPostgresUrl(databaseUrl);
 
   try {
