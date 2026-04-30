@@ -17,9 +17,13 @@ import {
   Zap,
   Plug,
   ChevronDown,
+  ChevronRight,
   ArrowUpDown,
   CircleCheck,
   CircleX,
+  Globe,
+  Landmark,
+  Package,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -68,6 +72,9 @@ import {
   PROVIDER_PRESETS,
   getProvidersByType,
   getModelsByProviderAndType,
+  getProvidersByCategory,
+  getTotalProviderCount,
+  getTotalModelCount,
   type ProviderPreset,
 } from '@/lib/provider-presets';
 
@@ -145,6 +152,9 @@ export default function SettingsView() {
   const [testing, setTesting] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<Record<string, { success: boolean; message: string }>>({});
 
+  // Provider category filter in dialog
+  const [providerCategoryFilter, setProviderCategoryFilter] = useState<'all' | 'domestic' | 'international'>('all');
+
   // Agent Config dialog
   const [agentDialog, setAgentDialog] = useState(false);
   const [editingAgentConfig, setEditingAgentConfig] = useState<AgentConfig | null>(null);
@@ -180,6 +190,16 @@ export default function SettingsView() {
 
   // ==================== Provider Preset Helpers ====================
   const availableProviders = getProvidersByType(aiForm.serviceType as 'text' | 'image' | 'video' | 'audio');
+
+  // 按分类过滤供应商
+  const filteredAvailableProviders = providerCategoryFilter === 'all'
+    ? availableProviders
+    : availableProviders.filter(p => p.category === providerCategoryFilter);
+
+  const domesticProviders = filteredAvailableProviders.filter(p => p.category === 'domestic');
+  const internationalProviders = filteredAvailableProviders.filter(p => p.category === 'international');
+  const customProviders = filteredAvailableProviders.filter(p => p.category === 'custom');
+
   const availableModels = aiForm.provider
     ? getModelsByProviderAndType(aiForm.provider, aiForm.serviceType as 'text' | 'image' | 'video' | 'audio')
     : [];
@@ -205,6 +225,7 @@ export default function SettingsView() {
   const openAiCreate = () => {
     setEditingAiConfig(null);
     setTestResult({});
+    setProviderCategoryFilter('all');
     setAiForm({
       name: '',
       serviceType: activeServiceType,
@@ -221,6 +242,7 @@ export default function SettingsView() {
   const openAiEdit = (config: AiConfig) => {
     setEditingAiConfig(config);
     setTestResult({});
+    setProviderCategoryFilter('all');
     setAiForm({
       name: config.name,
       serviceType: config.serviceType,
@@ -396,6 +418,11 @@ export default function SettingsView() {
     return preset?.icon || '⚙️';
   };
 
+  const getPresetCategory = (providerId: string) => {
+    const preset = PROVIDER_PRESETS.find(p => p.id === providerId);
+    return preset?.category || 'custom';
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -405,7 +432,10 @@ export default function SettingsView() {
           系统设置
         </h1>
         <p className="text-muted-foreground text-sm mt-1">
-          配置 AI 模型供应商和 Agent 参数，支持多种文本、图片、视频、语音合成服务
+          配置 AI 模型供应商和 Agent 参数，支持{' '}
+          <span className="font-medium text-foreground">{getTotalProviderCount()}</span> 家供应商、
+          <span className="font-medium text-foreground">{getTotalModelCount()}</span>+ 模型，
+          覆盖文本、图片、视频、语音合成四大服务类型
         </p>
       </div>
 
@@ -428,7 +458,7 @@ export default function SettingsView() {
               <div>
                 <CardTitle className="text-base">模型供应商配置</CardTitle>
                 <CardDescription>
-                  添加并管理 AI 服务接入，系统将按优先级自动选择供应商
+                  添加并管理 AI 服务接入，系统将按优先级自动选择供应商（支持 fallback 链）
                 </CardDescription>
               </div>
               <Button size="sm" onClick={openAiCreate} className="gap-1.5">
@@ -474,15 +504,42 @@ export default function SettingsView() {
                     点击「添加供应商」快速配置 {SERVICE_TYPES.find(s => s.value === activeServiceType)?.icon}
                     {SERVICE_TYPES.find(s => s.value === activeServiceType)?.label} 服务
                   </p>
-                  {/* 供应商推荐 */}
-                  <div className="mt-4 flex flex-wrap justify-center gap-2">
-                    {getProvidersByType(activeServiceType as 'text' | 'image' | 'video' | 'audio')
-                      .slice(0, 6)
-                      .map((p) => (
-                        <Badge key={p.id} variant="outline" className="text-xs py-1 px-2">
-                          {p.icon} {p.name}
-                        </Badge>
-                      ))}
+                  {/* 供应商推荐 - 按分类展示 */}
+                  <div className="mt-6 max-w-lg mx-auto space-y-3">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">推荐供应商</p>
+                    {[
+                      { cat: 'domestic' as const, label: '国内', icon: <Landmark className="h-3.5 w-3.5" /> },
+                      { cat: 'international' as const, label: '国际', icon: <Globe className="h-3.5 w-3.5" /> },
+                    ].map(({ cat, label, icon }) => {
+                      const providers = getProvidersByCategory(cat).filter(
+                        p => p.supportedTypes.includes(activeServiceType as 'text' | 'image' | 'video' | 'audio')
+                      );
+                      if (providers.length === 0) return null;
+                      return (
+                        <div key={cat} className="text-left">
+                          <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1.5">
+                            {icon}
+                            <span>{label}</span>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {providers.slice(0, 8).map((p) => (
+                              <Badge
+                                key={p.id}
+                                variant="outline"
+                                className="text-xs py-1 px-2 cursor-pointer hover:bg-accent transition-colors"
+                                onClick={() => {
+                                  setActiveServiceType(activeServiceType);
+                                  openAiCreate();
+                                  // Will auto-fill when user selects preset in dialog
+                                }}
+                              >
+                                {p.icon} {p.name}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               ) : (
@@ -509,13 +566,23 @@ export default function SettingsView() {
                               className="data-[state=checked]:bg-green-500"
                             />
                           </TableCell>
-                          <TableCell className="font-medium">{config.name}</TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-1.5">
+                              {config.isActive && (
+                                <span className="h-2 w-2 rounded-full bg-green-500 shrink-0" />
+                              )}
+                              <span className="font-medium">{config.name}</span>
+                            </div>
+                          </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-1.5">
                               <span>{getPresetIcon(config.provider)}</span>
                               <span className="text-sm text-muted-foreground">
                                 {getPresetName(config.provider)}
                               </span>
+                              {getPresetCategory(config.provider) === 'domestic' && (
+                                <Badge variant="secondary" className="text-[10px] px-1 py-0">国内</Badge>
+                              )}
                             </div>
                           </TableCell>
                           <TableCell className="hidden md:table-cell">
@@ -577,6 +644,19 @@ export default function SettingsView() {
                       ))}
                     </TableBody>
                   </Table>
+                </div>
+              )}
+
+              {/* 底部统计信息 */}
+              {!loading && filteredConfigs.length > 0 && (
+                <div className="mt-4 pt-4 border-t flex items-center justify-between text-xs text-muted-foreground">
+                  <span>
+                    已配置 {filteredConfigs.length} 个{SERVICE_TYPES.find(s => s.value === activeServiceType)?.label}供应商，
+                    {filteredConfigs.filter(c => c.isActive).length} 个已启用
+                  </span>
+                  <span>
+                    系统支持 {getProvidersByType(activeServiceType as 'text' | 'image' | 'video' | 'audio').length} 家供应商可选
+                  </span>
                 </div>
               )}
             </CardContent>
@@ -675,7 +755,7 @@ export default function SettingsView() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            {/* 服务类型 + 启用状态 */}
+            {/* 服务类型 + 优先级 */}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>服务类型</Label>
@@ -717,7 +797,7 @@ export default function SettingsView() {
               </div>
             </div>
 
-            {/* 供应商预设选择 */}
+            {/* 供应商预设选择 - 分组显示 */}
             <div className="space-y-2">
               <Label>供应商预设</Label>
               <Select
@@ -728,14 +808,45 @@ export default function SettingsView() {
                   <SelectValue placeholder="选择供应商..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {availableProviders.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>
-                      <span className="flex items-center gap-2">
-                        <span>{p.icon}</span>
-                        <span>{p.name}</span>
-                      </span>
-                    </SelectItem>
-                  ))}
+                  {/* 国内供应商组 */}
+                  {domesticProviders.length > 0 && (
+                    <SelectGroup label="国内供应商">
+                      {domesticProviders.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          <span className="flex items-center gap-2">
+                            <span>{p.icon}</span>
+                            <span>{p.name}</span>
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  )}
+                  {/* 国际供应商组 */}
+                  {internationalProviders.length > 0 && (
+                    <SelectGroup label="国际供应商">
+                      {internationalProviders.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          <span className="flex items-center gap-2">
+                            <span>{p.icon}</span>
+                            <span>{p.name}</span>
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  )}
+                  {/* 自定义 */}
+                  {customProviders.length > 0 && (
+                    <SelectGroup label="自定义">
+                      {customProviders.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          <span className="flex items-center gap-2">
+                            <span>{p.icon}</span>
+                            <span>{p.name}</span>
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  )}
                 </SelectContent>
               </Select>
               {aiForm.provider && (
@@ -978,6 +1089,18 @@ export default function SettingsView() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  );
+}
+
+// SelectGroup helper component (inline)
+function SelectGroup({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1">
+      <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
+        {label}
+      </div>
+      {children}
     </div>
   );
 }
