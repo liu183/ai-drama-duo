@@ -5,7 +5,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Music,
   Upload,
-  X,
   Play,
   Check,
   Loader2,
@@ -18,7 +17,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
 import { storyboardApi } from '@/lib/api';
 
@@ -44,6 +42,7 @@ interface TTSPanelProps {
 // ==================== TTS Panel Component ====================
 export default function TTSPanel({ storyboards, characters, episodeId, loadData }: TTSPanelProps) {
   const [uploadingId, setUploadingId] = useState<string | null>(null);
+  const [generatingId, setGeneratingId] = useState<string | null>(null);
   const [batchProcessing, setBatchProcessing] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
   const [playingId, setPlayingId] = useState<string | null>(null);
@@ -135,8 +134,87 @@ export default function TTSPanel({ storyboards, characters, episodeId, loadData 
     setPlayingId(sbId);
   };
 
-  const handleBatchUpload = () => {
-    toast.info('AI 批量配音功能即将上线，目前支持手动上传音频文件');
+  // AI 生成单个分镜配音
+  const handleSingleGenerate = async (sbId: string) => {
+    const sb = storyboards.find(s => s.id === sbId);
+    if (!sb?.dialogue) {
+      toast.error('该分镜没有对话内容，无法生成配音');
+      return;
+    }
+
+    setGeneratingId(sbId);
+    try {
+      const resp = await fetch('/api/generate/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          storyboardId: sbId,
+          text: sb.dialogue,
+          voiceStyle: (sb.characters?.[0] && 'character' in sb.characters[0]) ? sb.characters[0].character?.voiceStyle : characters[0]?.voiceStyle || 'default',
+          characterName: (sb.characters?.[0] && 'character' in sb.characters[0]) ? sb.characters[0].character?.name : characters[0]?.name || '',
+        }),
+      });
+      const data = await resp.json();
+      if (data.success && data.base64) {
+        await storyboardApi.update(sbId, { ttsAudioUrl: data.base64 });
+        toast.success('配音生成成功');
+        await loadData();
+      } else {
+        toast.error(data.error || data.message || '配音生成失败');
+      }
+    } catch (err) {
+      toast.error('配音生成请求失败，请重试');
+      console.error('TTS gen error:', err);
+    } finally {
+      setGeneratingId(null);
+    }
+  };
+
+  // AI 批量配音
+  const handleBatchGenerate = async () => {
+    const pending = storyboards.filter(sb => sb.dialogue && !sb.ttsAudioUrl);
+    if (pending.length === 0) {
+      toast.info('没有需要配音的分镜（所有含对话的分镜都已配音）');
+      return;
+    }
+
+    setBatchProcessing(true);
+    setBatchProgress({ current: 0, total: pending.length });
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < pending.length; i++) {
+      const sb = pending[i];
+      setBatchProgress(prev => ({ ...prev, current: i + 1 }));
+      setGeneratingId(sb.id);
+      try {
+        const resp = await fetch('/api/generate/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            storyboardId: sb.id,
+            text: sb.dialogue,
+            voiceStyle: (sb.characters?.[0] && 'character' in sb.characters[0]) ? sb.characters[0].character?.voiceStyle : characters[0]?.voiceStyle || 'default',
+            characterName: (sb.characters?.[0] && 'character' in sb.characters[0]) ? sb.characters[0].character?.name : characters[0]?.name || '',
+          }),
+        });
+        const data = await resp.json();
+        if (data.success && data.base64) {
+          await storyboardApi.update(sb.id, { ttsAudioUrl: data.base64 });
+          successCount++;
+        } else {
+          failCount++;
+        }
+      } catch {
+        failCount++;
+      }
+      setGeneratingId(null);
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+    setBatchProcessing(false);
+    toast.success(`批量配音完成：${successCount} 成功，${failCount} 失败`);
+    await loadData();
   };
 
   return (
@@ -218,9 +296,13 @@ export default function TTSPanel({ storyboards, characters, episodeId, loadData 
               <Music className="h-4 w-4" />
               分镜配音列表 ({stats.withAudio}/{stats.withDialogue})
             </CardTitle>
-            <Button size="sm" variant="outline" onClick={handleBatchUpload} disabled={batchProcessing} className="gap-1.5">
-              <Music className="h-3.5 w-3.5" />
-              批量配音
+            <Button size="sm" variant="outline" onClick={handleBatchGenerate} disabled={batchProcessing || stats.withDialogue - stats.withAudio === 0} className="gap-1.5">
+              {batchProcessing ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Music className="h-3.5 w-3.5" />
+              )}
+              {batchProcessing ? `配音中 ${batchProgress.current}/${batchProgress.total}` : '批量AI配音'}
             </Button>
           </div>
         </CardHeader>
@@ -230,12 +312,14 @@ export default function TTSPanel({ storyboards, characters, episodeId, loadData 
               const hasDialogue = !!sb.dialogue;
               const hasAudio = !!sb.ttsAudioUrl;
               const isUploading = uploadingId === sb.id;
+              const isGenerating = generatingId === sb.id;
               const isPlaying = playingId === sb.id;
+              const isBusy = isUploading || isGenerating;
 
               // Find character names for this storyboard
-              const charNames = sb.characters
-                ?.map((c) => c.character.name)
-                .filter(Boolean) || [];
+              const charNames = (sb.characters || [])
+                .map((c) => 'character' in c ? c.character?.name : c.name)
+                .filter(Boolean) as string[];
 
               return (
                 <motion.div
@@ -247,7 +331,7 @@ export default function TTSPanel({ storyboards, characters, episodeId, loadData 
                   <div className="flex items-center gap-3">
                     {/* Status dot */}
                     <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                      hasAudio ? 'bg-green-500' : hasDialogue ? 'bg-amber-500' : 'bg-muted-foreground/20'
+                      isGenerating ? 'bg-blue-500 animate-pulse' : hasAudio ? 'bg-green-500' : hasDialogue ? 'bg-amber-500' : 'bg-muted-foreground/20'
                     }`} />
 
                     {/* Number */}
@@ -302,10 +386,15 @@ export default function TTSPanel({ storyboards, characters, episodeId, loadData 
                               size="sm"
                               variant="outline"
                               className="h-7 gap-1"
-                              onClick={() => toast.info('AI 配音功能即将上线，请手动上传音频')}
+                              onClick={() => handleSingleGenerate(sb.id)}
+                              disabled={isGenerating}
                             >
-                              <Music className="h-3.5 w-3.5" />
-                              生成
+                              {isGenerating ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Music className="h-3.5 w-3.5" />
+                              )}
+                              {isGenerating ? '生成中' : 'AI生成'}
                             </Button>
                           )}
                           <Button
@@ -313,7 +402,7 @@ export default function TTSPanel({ storyboards, characters, episodeId, loadData 
                             variant="outline"
                             className="h-7 w-7"
                             onClick={() => handleUploadClick(sb.id)}
-                            disabled={isUploading}
+                            disabled={isBusy}
                           >
                             {isUploading ? (
                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -348,8 +437,8 @@ export default function TTSPanel({ storyboards, characters, episodeId, loadData 
       <Card className="bg-muted/20">
         <CardContent className="p-3">
           <p className="text-xs text-muted-foreground">
-            <strong>提示：</strong>支持上传 MP3/WAV/M4A/OGG 格式的音频文件（最大 50MB）。
-            AI 自动配音功能正在开发中，目前请手动上传每个分镜的配音文件。
+            <strong>提示：</strong>支持上传 MP3/WAV/M4A/OGG 格式的音频文件（最大 50MB），也可点击「AI生成」自动生成配音。
+            如 AI 配音不可用，请先在设置页面配置 TTS 服务 API。
           </p>
         </CardContent>
       </Card>

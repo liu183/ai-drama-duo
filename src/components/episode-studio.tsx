@@ -1480,6 +1480,7 @@ function ImageGenPanel({
   });
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [uploadingId, setUploadingId] = useState<string | null>(null);
+  const [generatingId, setGeneratingId] = useState<string | null>(null);
   const [uploadedImages, setUploadedImages] = useState<Record<string, string>>({});
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
@@ -1487,21 +1488,84 @@ function ImageGenPanel({
   const imageStatuses = useMemo<Record<string, 'pending' | 'generating' | 'completed' | 'failed'>>(() => {
     const statuses: Record<string, 'pending' | 'generating' | 'completed' | 'failed'> = {};
     storyboards.forEach(sb => {
-      statuses[sb.id] = (sb.composedImage || uploadedImages[sb.id]) ? 'completed' : 'pending';
+      statuses[sb.id] = generatingId === sb.id ? 'generating' : (sb.composedImage || uploadedImages[sb.id]) ? 'completed' : 'pending';
     });
     return statuses;
-  }, [storyboards, uploadedImages]);
+  }, [storyboards, uploadedImages, generatingId]);
 
   const handleGeneratePrompt = async () => {
     toast.info('请点击上方「AI 处理」按钮生成画面提示词');
   };
 
-  const handleBatchGenerate = () => {
-    toast.info('画面生成功能即将上线，敬请期待！');
+  // AI 生成单张图片
+  const handleSingleGenerate = async (sbId: string) => {
+    const sb = storyboards.find(s => s.id === sbId);
+    if (!sb?.imagePrompt) {
+      toast.error('该分镜没有画面提示词，请先生成提示词');
+      return;
+    }
+
+    setGeneratingId(sbId);
+    try {
+      const resp = await fetch('/api/generate/image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storyboardId: sbId, prompt: sb.imagePrompt, size: '1024x1024' }),
+      });
+      const data = await resp.json();
+      if (data.success) {
+        setUploadedImages(prev => ({ ...prev, [sbId]: data.base64 }));
+        toast.success('画面生成成功');
+        await loadData();
+      } else {
+        toast.error(data.error || data.message || '画面生成失败');
+      }
+    } catch (err) {
+      toast.error('画面生成请求失败，请重试');
+      console.error('Image gen error:', err);
+    } finally {
+      setGeneratingId(null);
+    }
   };
 
-  const handleSingleGenerate = (sbId: string) => {
-    toast.info('画面生成功能即将上线，敬请期待！');
+  // AI 批量生成图片
+  const handleBatchGenerate = async () => {
+    const pending = storyboards.filter(sb => sb.imagePrompt && !sb.composedImage && !uploadedImages[sb.id]);
+    if (pending.length === 0) {
+      toast.info('没有需要生成的分镜（没有待处理的提示词）');
+      return;
+    }
+
+    setBatchProgress({ current: 0, total: pending.length, generating: true });
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < pending.length; i++) {
+      const sb = pending[i];
+      setBatchProgress(prev => ({ ...prev, current: i + 1 }));
+      try {
+        const resp = await fetch('/api/generate/image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ storyboardId: sb.id, prompt: sb.imagePrompt, size: '1024x1024' }),
+        });
+        const data = await resp.json();
+        if (data.success) {
+          setUploadedImages(prev => ({ ...prev, [sb.id]: data.base64 }));
+          successCount++;
+        } else {
+          failCount++;
+        }
+      } catch {
+        failCount++;
+      }
+      // 间隔 500ms 避免频率限制
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    setBatchProgress(prev => ({ ...prev, generating: false }));
+    toast.success(`批量生成完成：${successCount} 成功，${failCount} 失败`);
+    await loadData();
   };
 
   const handleCopyPrompt = async (sbId: string, prompt: string) => {
@@ -1656,11 +1720,17 @@ function ImageGenPanel({
               <Button
                 size="sm"
                 onClick={handleBatchGenerate}
-                disabled={agentLoading || completedCount === 0}
+                disabled={agentLoading || batchProgress.generating || completedCount === 0}
                 className="gap-1.5"
               >
-                <ImagePlus className="h-3.5 w-3.5" />
-                批量生成画面
+                {batchProgress.generating ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <ImagePlus className="h-3.5 w-3.5" />
+                )}
+                {batchProgress.generating
+                  ? `生成中 ${batchProgress.current}/${batchProgress.total}`
+                  : '批量生成画面'}
               </Button>
             </div>
           </div>
@@ -1861,10 +1931,14 @@ function ImageGenPanel({
                       size="sm"
                       className="flex-1 text-xs gap-1.5"
                       onClick={() => handleSingleGenerate(sb.id)}
-                      disabled={!sb.imagePrompt}
+                      disabled={!sb.imagePrompt || generatingId === sb.id}
                     >
-                      <ImagePlus className="h-3 w-3" />
-                      生成画面
+                      {generatingId === sb.id ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <ImagePlus className="h-3 w-3" />
+                      )}
+                      {generatingId === sb.id ? '生成中...' : '生成画面'}
                     </Button>
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -1905,16 +1979,18 @@ function VideoGenPanel({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [uploadedVideos, setUploadedVideos] = useState<Record<string, string>>({});
   const [uploadingId, setUploadingId] = useState<string | null>(null);
+  const [generatingId, setGeneratingId] = useState<string | null>(null);
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; generating: boolean }>({ current: 0, total: 0, generating: false });
   const videoInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   // Compute video statuses
   const videoStatuses = useMemo<Record<string, 'pending' | 'generating' | 'completed'>>(() => {
     const statuses: Record<string, 'pending' | 'generating' | 'completed'> = {};
     storyboards.forEach(sb => {
-      statuses[sb.id] = (sb.videoUrl || uploadedVideos[sb.id]) ? 'completed' : 'pending';
+      statuses[sb.id] = generatingId === sb.id ? 'generating' : (sb.videoUrl || uploadedVideos[sb.id]) ? 'completed' : 'pending';
     });
     return statuses;
-  }, [storyboards, uploadedVideos]);
+  }, [storyboards, uploadedVideos, generatingId]);
 
   const handleCopyPrompt = async (sbId: string, prompt: string) => {
     const success = await copyToClipboard(prompt);
@@ -1979,12 +2055,94 @@ function VideoGenPanel({
     }
   };
 
-  const handleBatchGenerate = () => {
-    toast.info('AI视频生成功能即将上线，敬请期待！');
+  // AI 生成单个视频
+  const handleSingleGenerate = async (sbId: string) => {
+    const sb = storyboards.find(s => s.id === sbId);
+    if (!sb?.videoPrompt) {
+      toast.error('该分镜没有视频提示词，请先生成提示词');
+      return;
+    }
+
+    setGeneratingId(sbId);
+    try {
+      const { cleanPrompt, params } = parseVideoParams(sb.videoPrompt);
+      let motionScale = 1;
+      let cameraSpeed = 1;
+      params.forEach(p => {
+        if (p.includes('motion_scale')) motionScale = parseFloat(p.split('=')[1]) || 1;
+        if (p.includes('camera_speed')) cameraSpeed = parseFloat(p.split('=')[1]) || 1;
+      });
+
+      const resp = await fetch('/api/generate/video', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          storyboardId: sbId,
+          prompt: cleanPrompt,
+          referenceImage: sb.composedImage || undefined,
+          motionScale,
+          cameraSpeed,
+        }),
+      });
+      const data = await resp.json();
+      if (data.success && data.base64) {
+        setUploadedVideos(prev => ({ ...prev, [sbId]: data.base64 }));
+        toast.success('视频生成成功');
+        await loadData();
+      } else {
+        toast.error(data.error || data.message || '视频生成失败');
+      }
+    } catch (err) {
+      toast.error('视频生成请求失败，请重试');
+      console.error('Video gen error:', err);
+    } finally {
+      setGeneratingId(null);
+    }
   };
 
-  const handleSingleGenerate = (sbId: string) => {
-    toast.info('AI视频生成功能即将上线，敬请期待！');
+  // AI 批量生成视频
+  const handleBatchGenerate = async () => {
+    const pending = storyboards.filter(sb => sb.videoPrompt && !sb.videoUrl && !uploadedVideos[sb.id]);
+    if (pending.length === 0) {
+      toast.info('没有需要生成的分镜');
+      return;
+    }
+
+    setBatchProgress({ current: 0, total: pending.length, generating: true });
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < pending.length; i++) {
+      const sb = pending[i];
+      setBatchProgress(prev => ({ ...prev, current: i + 1 }));
+      setGeneratingId(sb.id);
+      try {
+        const { cleanPrompt, params } = parseVideoParams(sb.videoPrompt);
+        let motionScale = 1, cameraSpeed = 1;
+        params.forEach(p => {
+          if (p.includes('motion_scale')) motionScale = parseFloat(p.split('=')[1]) || 1;
+          if (p.includes('camera_speed')) cameraSpeed = parseFloat(p.split('=')[1]) || 1;
+        });
+        const resp = await fetch('/api/generate/video', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ storyboardId: sb.id, prompt: cleanPrompt, referenceImage: sb.composedImage || undefined, motionScale, cameraSpeed }),
+        });
+        const data = await resp.json();
+        if (data.success && data.base64) {
+          setUploadedVideos(prev => ({ ...prev, [sb.id]: data.base64 }));
+          successCount++;
+        } else {
+          failCount++;
+        }
+      } catch { failCount++; }
+      setGeneratingId(null);
+      await new Promise(r => setTimeout(r, 1000));
+    }
+
+    setBatchProgress(prev => ({ ...prev, generating: false }));
+    toast.success(`批量生成完成：${successCount} 成功，${failCount} 失败`);
+    await loadData();
   };
 
   const promptCount = storyboards.filter(s => s.videoPrompt).length;
@@ -2048,11 +2206,17 @@ function VideoGenPanel({
               <Button
                 size="sm"
                 onClick={handleBatchGenerate}
-                disabled={agentLoading || imageCount === 0}
+                disabled={agentLoading || batchProgress.generating || imageCount === 0}
                 className="gap-1.5"
               >
-                <Sparkles className="h-3.5 w-3.5" />
-                批量生成视频
+                {batchProgress.generating ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3.5 w-3.5" />
+                )}
+                {batchProgress.generating
+                  ? `生成中 ${batchProgress.current}/${batchProgress.total}`
+                  : '批量生成视频'}
               </Button>
             </div>
           </div>
@@ -2303,10 +2467,14 @@ function VideoGenPanel({
                       size="sm"
                       className="flex-1 text-xs gap-1.5"
                       onClick={() => handleSingleGenerate(sb.id)}
-                      disabled={agentLoading || (!sb.videoPrompt && !displayImage)}
+                      disabled={agentLoading || generatingId === sb.id || (!sb.videoPrompt && !displayImage)}
                     >
-                      <Sparkles className="h-3 w-3" />
-                      生成视频
+                      {generatingId === sb.id ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Sparkles className="h-3 w-3" />
+                      )}
+                      {generatingId === sb.id ? '生成中...' : '生成视频'}
                     </Button>
                     <Tooltip>
                       <TooltipTrigger asChild>
