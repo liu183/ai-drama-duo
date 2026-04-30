@@ -275,14 +275,17 @@ const AGENT_PROMPTS: Record<string, string> = {
 
 // POST /api/agent - Run an AI agent task
 export async function POST(request: NextRequest) {
+  let agentType = '';
+  let dramaId = '';
+  let episodeId: string | undefined;
+  let message = '';
+
   try {
     const body = await request.json();
-    const {
-      agentType,
-      dramaId,
-      episodeId,
-      message,
-    } = body;
+    agentType = body.agentType;
+    dramaId = body.dramaId;
+    episodeId = body.episodeId;
+    message = body.message;
 
     // Validate required fields
     if (!agentType || !dramaId || !message) {
@@ -675,7 +678,7 @@ ${message || '请根据以上分镜信息，为每个分镜生成英文视频提
           };
 
           await db.$transaction(
-            extractedCharacters.map((char: Record<string, unknown>, index: number) => {
+            (extractedCharacters as Record<string, unknown>[]).map((char, index) => {
               const roleName = (char.role as string) || '配角';
               return db.character.create({
                 data: {
@@ -695,7 +698,7 @@ ${message || '请根据以上分镜信息，为每个分镜生成英文视频提
         // Save scenes
         if (extractedScenes.length > 0) {
           await db.$transaction(
-            extractedScenes.map((scene: Record<string, unknown>) => {
+            (extractedScenes as Record<string, unknown>[]).map((scene) => {
               return db.scene.create({
                 data: {
                   dramaId,
@@ -721,17 +724,18 @@ ${message || '请根据以上分镜信息，为每个分镜生成英文视频提
       case 'storyboard_breaker': {
         const storyboards = extractJSON(result);
         if (storyboards && storyboards.length > 0 && episodeId) {
+          const eid = episodeId;
           // Delete existing storyboards for this episode
           await db.storyboard.deleteMany({
-            where: { episodeId },
+            where: { episodeId: eid },
           });
 
           // Create new storyboards
           const created = await db.$transaction(
-            storyboards.map((sb: Record<string, unknown>, index: number) => {
+            (storyboards as Record<string, unknown>[]).map((sb, index) => {
               return db.storyboard.create({
                 data: {
-                  episodeId,
+                  episodeId: eid,
                   storyboardNumber: (sb.storyboardNumber as number) || (index + 1),
                   title: (sb.title as string) || `分镜${index + 1}`,
                   location: (sb.location as string) || '',
@@ -765,7 +769,7 @@ ${message || '请根据以上分镜信息，为每个分镜生成英文视频提
         const voiceAssignments = extractJSON(result);
         if (voiceAssignments && voiceAssignments.length > 0) {
           const updateResults = await Promise.all(
-            voiceAssignments.map(async (va: Record<string, unknown>) => {
+            (voiceAssignments as Record<string, unknown>[]).map(async (va) => {
               const name = (va.name as string)?.trim();
               if (!name) return null;
 
@@ -794,7 +798,7 @@ ${message || '请根据以上分镜信息，为每个分镜生成英文视频提
         const prompts = extractJSON(result);
         if (prompts && prompts.length > 0 && episodeId) {
           const updateResults = await Promise.all(
-            prompts.map(async (p: Record<string, unknown>) => {
+            (prompts as Record<string, unknown>[]).map(async (p) => {
               const sbNum = p.storyboardNumber as number;
               const prompt = (p.imagePrompt as string) || '';
               if (!sbNum || !prompt) return null;
@@ -821,7 +825,7 @@ ${message || '请根据以上分镜信息，为每个分镜生成英文视频提
         const videoPrompts = extractJSON(result);
         if (videoPrompts && videoPrompts.length > 0 && episodeId) {
           const updateResults = await Promise.all(
-            videoPrompts.map(async (p: Record<string, unknown>) => {
+            (videoPrompts as Record<string, unknown>[]).map(async (p) => {
               const sbNum = p.storyboardNumber as number;
               const vprompt = (p.videoPrompt as string) || '';
               if (!sbNum || !vprompt) return null;
@@ -866,13 +870,13 @@ ${message || '请根据以上分镜信息，为每个分镜生成英文视频提
 
     // Save error to chat log if we have the required fields
     try {
-      if (body.agentType && body.dramaId) {
+      if (agentType && dramaId) {
         await db.agentChatLog.create({
           data: {
-            dramaId: body.dramaId,
-            episodeId: body.episodeId || null,
-            agentType: body.agentType,
-            input: body.message || '',
+            dramaId,
+            episodeId: episodeId || null,
+            agentType,
+            input: message || '',
             output: `Error: ${(error as Error).message}`,
             status: 'failed',
           },

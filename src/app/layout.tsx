@@ -17,7 +17,6 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "短剧Agent - AI短剧创作平台",
   description: "基于AI的短剧全流程创作平台",
-  lang: "zh-CN",
   keywords: ["短剧", "AI", "创作", "短剧Agent", "剧本", "分镜"],
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",

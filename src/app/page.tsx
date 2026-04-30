@@ -165,7 +165,7 @@ export default function HomePage() {
                   dramaId={view.dramaId}
                   episodeId={view.episodeId}
                   episodeNumber={view.episodeNumber}
-                  onBack={navigateToDrama}
+                  onBack={() => navigateToDrama(view.dramaId)}
                 />
               )}
 

@@ -60,6 +60,8 @@ import {
 } from '@/lib/api';
 import MergePanel from '@/components/merge-panel';
 import ExportPanel from '@/components/export-panel';
+import TTSPanel from '@/components/tts-panel';
+import ComposePanel from '@/components/compose-panel';
 
 // ==================== Copy to Clipboard Utility ====================
 async function copyToClipboard(text: string): Promise<boolean> {
@@ -1391,22 +1393,21 @@ function renderStepContent(props: {
     // ==================== Step 8: TTS ====================
     case 'tts':
       return (
-        <UpcomingStepPanel
-          stepKey={stepKey}
-          info={UPCOMING_STEP_INFO[stepKey]}
+        <TTSPanel
           storyboards={props.storyboards}
-          characters={props.characters}
+          characters={props.characters.map(c => ({ name: c.name, voiceStyle: c.voiceStyle }))}
+          episodeId={props.episodeId}
+          loadData={props.loadData}
         />
       );
 
     // ==================== Step 9: Compose ====================
     case 'compose':
       return (
-        <UpcomingStepPanel
-          stepKey={stepKey}
-          info={UPCOMING_STEP_INFO[stepKey]}
+        <ComposePanel
           storyboards={props.storyboards}
-          characters={props.characters}
+          episodeId={props.episodeId}
+          loadData={props.loadData}
         />
       );
 
