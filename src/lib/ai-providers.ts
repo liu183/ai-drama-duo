@@ -1,7 +1,7 @@
 /**
  * 统一 AI 供应商调用层
  * 从数据库 AiServiceConfig 读取配置，支持多供应商 fallback 链
- * 兼容 Z.ai 平台 SDK + OpenAI 兼容接口 + 自定义 API
+ * 兼容 Z.ai 平台 SDK + OpenAI 兼容接口 + Anthropic 接口 + 自定义 API
  */
 
 import { db } from './db';
@@ -21,6 +21,10 @@ export interface ProviderConfig {
   isActive: boolean;
   priority: number;
   config: Record<string, unknown>;
+  /** 供应商预设的 authType，如 'bearer' | 'x-api-key' */
+  authType?: string;
+  /** 供应商预设的 apiFormat，如 'openai' | 'anthropic' */
+  apiFormat?: string;
 }
 
 // ==================== 配置读取 ====================
@@ -51,18 +55,26 @@ export async function getActiveProviders(serviceType: ServiceType): Promise<Prov
     orderBy: [{ priority: 'desc' }, { createdAt: 'desc' }],
   });
 
-  const parsed: ProviderConfig[] = configs.map(c => ({
-    id: c.id,
-    name: c.name,
-    serviceType: c.serviceType as ServiceType,
-    provider: c.provider,
-    apiKey: c.apiKey,
-    baseUrl: c.baseUrl,
-    model: c.model,
-    isActive: c.isActive,
-    priority: c.priority,
-    config: parseJsonConfig(c.config),
-  }));
+  // 查找预设信息以补充 authType 和 apiFormat
+  const { getProviderPreset } = await import('./provider-presets');
+
+  const parsed: ProviderConfig[] = configs.map(c => {
+    const preset = getProviderPreset(c.provider);
+    return {
+      id: c.id,
+      name: c.name,
+      serviceType: c.serviceType as ServiceType,
+      provider: c.provider,
+      apiKey: c.apiKey,
+      baseUrl: c.baseUrl,
+      model: c.model,
+      isActive: c.isActive,
+      priority: c.priority,
+      config: parseJsonConfig(c.config),
+      authType: preset?.authType,
+      apiFormat: preset?.apiFormat,
+    };
+  });
 
   // 更新缓存
   if (!configCache) configCache = new Map();
@@ -168,13 +180,25 @@ export async function generateText(options: TextGenOptions): Promise<TextGenResu
   // 3. 按优先级逐个尝试
   for (const provider of sortedProviders) {
     try {
-      const result = await callOpenAICompatible(
-        provider,
-        systemPrompt,
-        userMessage,
-        { temperature, maxTokens, model: model || provider.model }
-      );
-      return { content: result, provider: provider.provider, model: model || provider.model };
+      let content: string;
+
+      // 检查是否是 Anthropic 格式
+      if (provider.apiFormat === 'anthropic' || provider.provider === 'anthropic') {
+        content = await callAnthropicAPI(provider, systemPrompt, userMessage, {
+          temperature,
+          maxTokens,
+          model: model || provider.model,
+        });
+      } else {
+        content = await callOpenAICompatible(
+          provider,
+          systemPrompt,
+          userMessage,
+          { temperature, maxTokens, model: model || provider.model }
+        );
+      }
+
+      return { content, provider: provider.provider, model: model || provider.model };
     } catch (error) {
       console.warn(`[AI] Provider "${provider.name}" (${provider.provider}) failed:`, (error as Error).message);
     }
@@ -194,6 +218,64 @@ export async function generateText(options: TextGenOptions): Promise<TextGenResu
   }
 
   throw new Error('所有文本生成供应商均不可用，请在设置页面配置 AI 服务');
+}
+
+/**
+ * Anthropic Messages API 调用
+ * Anthropic 使用不同的 API 格式：POST /v1/messages + x-api-key 头
+ */
+async function callAnthropicAPI(
+  provider: ProviderConfig,
+  systemPrompt: string,
+  userMessage: string,
+  options: { temperature: number; maxTokens: number; model: string }
+): Promise<string> {
+  const baseUrl = provider.baseUrl.replace(/\/+$/, '');
+  const model = options.model;
+
+  // Anthropic API 需要 anthropic-version 头
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'anthropic-version': '2023-06-01',
+  };
+
+  // 认证头：x-api-key 或 Bearer
+  if (provider.authType === 'x-api-key') {
+    headers['x-api-key'] = provider.apiKey;
+  } else {
+    headers['Authorization'] = `Bearer ${provider.apiKey}`;
+  }
+
+  const response = await fetch(`${baseUrl}/v1/messages`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model,
+      max_tokens: options.maxTokens,
+      temperature: options.temperature,
+      system: systemPrompt,
+      messages: [
+        { role: 'user', content: userMessage },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => 'Unknown error');
+    throw new Error(`Anthropic API error ${response.status}: ${errorBody}`);
+  }
+
+  const data = await response.json();
+
+  // Anthropic 返回格式：{ content: [{ type: 'text', text: '...' }] }
+  const textBlocks = data.content?.filter(
+    (block: { type: string }) => block.type === 'text'
+  );
+  if (textBlocks && textBlocks.length > 0) {
+    return textBlocks.map((block: { text: string }) => block.text).join('');
+  }
+
+  throw new Error('No content in Anthropic response');
 }
 
 /**
@@ -372,14 +454,21 @@ async function callImageProvider(
   const baseUrl = provider.baseUrl.replace(/\/+$/, '');
   const model = options.model;
 
+  // 构建请求头
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+  };
+  if (provider.authType === 'x-api-key') {
+    headers['x-api-key'] = provider.apiKey;
+  } else {
+    headers['Authorization'] = `Bearer ${provider.apiKey}`;
+  }
+
   // 大多数图片生成使用 OpenAI /images/generations 兼容接口
   const response = await fetch(`${baseUrl}/images/generations`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${provider.apiKey}`,
-      'Accept': 'application/json',
-    },
+    headers,
     body: JSON.stringify({
       prompt,
       model,
@@ -495,13 +584,20 @@ async function callTTSProvider(
 ): Promise<TTSResult> {
   const baseUrl = provider.baseUrl.replace(/\/+$/, '');
 
+  // 构建请求头
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (provider.authType === 'x-api-key') {
+    headers['x-api-key'] = provider.apiKey;
+  } else {
+    headers['Authorization'] = `Bearer ${provider.apiKey}`;
+  }
+
   // OpenAI 兼容 TTS 接口
   const response = await fetch(`${baseUrl}/audio/speech`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${provider.apiKey}`,
-    },
+    headers,
     body: JSON.stringify({
       model,
       input: text,
@@ -514,8 +610,7 @@ async function callTTSProvider(
     const response2 = await fetch(`${baseUrl}/audio/tts`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${provider.apiKey}`,
+        ...headers,
         'Accept': 'audio/mpeg',
       },
       body: JSON.stringify({ text, voice, language }),
@@ -641,6 +736,17 @@ async function callVideoProvider(
 ): Promise<Omit<VideoGenResult, 'provider' | 'model'>> {
   const baseUrl = provider.baseUrl.replace(/\/+$/, '');
 
+  // 构建请求头
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+  };
+  if (provider.authType === 'x-api-key') {
+    headers['x-api-key'] = provider.apiKey;
+  } else {
+    headers['Authorization'] = `Bearer ${provider.apiKey}`;
+  }
+
   const requestBody: Record<string, unknown> = {
     prompt,
     model: options.model,
@@ -654,11 +760,7 @@ async function callVideoProvider(
 
   const response = await fetch(`${baseUrl}/video/generations`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${provider.apiKey}`,
-      'Accept': 'application/json',
-    },
+    headers,
     body: JSON.stringify(requestBody),
   });
 
@@ -704,6 +806,21 @@ export interface TestConnectionResult {
 export async function testTextConnection(provider: ProviderConfig): Promise<TestConnectionResult> {
   const start = Date.now();
   try {
+    // Anthropic 格式
+    if (provider.apiFormat === 'anthropic' || provider.provider === 'anthropic') {
+      const content = await callAnthropicAPI(
+        provider,
+        'You are a test assistant. Reply with exactly: OK',
+        'Hi',
+        { temperature: 0, maxTokens: 10, model: provider.model }
+      );
+      const latency = Date.now() - start;
+      if (content) {
+        return { success: true, message: `连接成功 (${latency}ms)`, latency };
+      }
+      return { success: false, message: '连接成功但返回为空' };
+    }
+
     const content = await callOpenAICompatible(
       provider,
       'You are a test assistant. Reply with exactly: OK',
@@ -721,18 +838,24 @@ export async function testTextConnection(provider: ProviderConfig): Promise<Test
 }
 
 /**
- * 测试图片供应商连接（不实际生成，只验证 API 端点可达）
+ * 测试图片供应商连接（验证 API 端点可达）
  */
 export async function testImageConnection(provider: ProviderConfig): Promise<TestConnectionResult> {
   const start = Date.now();
   try {
     const baseUrl = provider.baseUrl.replace(/\/+$/, '');
+    const headers: Record<string, string> = {
+      'Authorization': `Bearer ${provider.apiKey}`,
+    };
+    if (provider.authType === 'x-api-key') {
+      headers['x-api-key'] = provider.apiKey;
+      delete headers['Authorization'];
+    }
+
     // 发送一个小请求测试连接
     const response = await fetch(`${baseUrl}/models`, {
       method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${provider.apiKey}`,
-      },
+      headers,
     });
     const latency = Date.now() - start;
     if (response.ok || response.status === 404 || response.status === 405) {
