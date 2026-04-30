@@ -98,6 +98,23 @@ export const agentApi = {
     fetchAPI('/agent', { method: 'POST', body: JSON.stringify(data) }),
 };
 
+// ==================== Merge API ====================
+export const mergeApi = {
+  getStatus: (episodeId: string) => fetchAPI(`/merge?episodeId=${episodeId}`),
+  merge: (data: { episodeId: string; storyboardIds?: string[]; mergeConfig?: Record<string, unknown> }) =>
+    fetchAPI('/merge', { method: 'POST', body: JSON.stringify(data) }),
+};
+
+// ==================== Export API ====================
+export const exportApi = {
+  // Returns JSON with content/filename/mimeType
+  getExportData: (episodeId: string, format: string) =>
+    fetchAPI('/export', { method: 'POST', body: JSON.stringify({ episodeId, format }) }),
+  // Downloads file directly
+  downloadUrl: (episodeId: string, format: string) =>
+    `/api/export?episodeId=${episodeId}&format=${format}`,
+};
+
 // ==================== Config APIs ====================
 export const agentConfigApi = {
   list: () => fetchAPI('/agent-configs'),

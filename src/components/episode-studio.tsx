@@ -58,6 +58,8 @@ import {
   storyboardApi,
   agentApi,
 } from '@/lib/api';
+import MergePanel from '@/components/merge-panel';
+import ExportPanel from '@/components/export-panel';
 
 // ==================== Copy to Clipboard Utility ====================
 async function copyToClipboard(text: string): Promise<boolean> {
@@ -146,6 +148,9 @@ interface Storyboard {
   duration: number;
   composedImage: string;
   videoUrl: string;
+  ttsAudioUrl: string;
+  subtitleUrl: string;
+  composedVideoUrl: string;
   status: string;
   characters?: Character[];
 }
@@ -248,37 +253,48 @@ const UPCOMING_STEP_INFO: Record<string, { title: string; description: string; i
   },
   tts: {
     title: '配音合成',
-    description: '为每个分镜的对话内容生成语音配音，支持多种音色和情感表达，自动匹配角色配音方案',
+    description: '为每个分镜的对话内容生成语音配音，支持多种音色和情感表达，自动匹配角色配音方案。可上传已有的音频文件作为配音素材。',
     icon: Music,
     dependencies: ['角色配音方案', '分镜对话'],
     dataPreview: (storyboards) => {
       const withDialogue = storyboards.filter(s => s.dialogue).length;
+      const withAudio = storyboards.filter(s => s.ttsAudioUrl).length;
       return [
         { label: '总分镜数', value: `${storyboards.length}` },
         { label: '包含对话', value: `${withDialogue}` },
-        { label: '需要配音', value: `${withDialogue}` },
+        { label: '已配音', value: `${withAudio}` },
       ];
     },
   },
   compose: {
     title: '成片合成',
-    description: '将每个分镜的画面、视频和配音合成为完整的分镜片段，添加字幕和转场效果',
+    description: '将每个分镜的画面、视频和配音合成为完整的分镜片段，添加字幕和转场效果，生成可播放的视频内容。',
     icon: Link2,
     dependencies: ['画面生成', '配音合成'],
-    dataPreview: (storyboards) => [
-      { label: '总分镜数', value: `${storyboards.length}` },
-      { label: '预计总时长', value: `${storyboards.reduce((a, s) => a + s.duration, 0)}秒` },
-    ],
+    dataPreview: (storyboards) => {
+      const withVideo = storyboards.filter(s => s.videoUrl).length;
+      const withComposed = storyboards.filter(s => s.composedVideoUrl).length;
+      return [
+        { label: '总分镜数', value: `${storyboards.length}` },
+        { label: '已有视频', value: `${withVideo}` },
+        { label: '已合成', value: `${withComposed}` },
+        { label: '预计总时长', value: `${storyboards.reduce((a, s) => a + s.duration, 0)}秒` },
+      ];
+    },
   },
   merge: {
     title: '集数合并',
-    description: '将所有分镜片段按顺序合并为完整的一集短剧，添加片头片尾和背景音乐',
+    description: '将所有分镜片段按顺序合并为完整的一集短剧，可配置转场效果和背景音乐，生成最终成片。',
     icon: Package,
     dependencies: ['成片合成'],
-    dataPreview: (storyboards) => [
-      { label: '总分镜数', value: `${storyboards.length}` },
-      { label: '预计总时长', value: `${storyboards.reduce((a, s) => a + s.duration, 0)}秒` },
-    ],
+    dataPreview: (storyboards) => {
+      const withVideo = storyboards.filter(s => s.videoUrl || s.composedVideoUrl).length;
+      return [
+        { label: '总分镜数', value: `${storyboards.length}` },
+        { label: '可用片段', value: `${withVideo}` },
+        { label: '预计总时长', value: `${storyboards.reduce((a, s) => a + s.duration, 0)}秒` },
+      ];
+    },
   },
   export: {
     title: '导出完成',
@@ -318,6 +334,14 @@ function getStepStatus(stepKey: string, episode: Episode, characters: Character[
       return storyboards.length > 0 && storyboards.every(s => s.imagePrompt) ? 'done' : 'pending';
     case 'video_gen':
       return storyboards.length > 0 && storyboards.every(s => s.videoPrompt) ? 'done' : 'pending';
+    case 'tts':
+      return storyboards.length > 0 && storyboards.some(s => s.ttsAudioUrl) ? 'done' : 'pending';
+    case 'compose':
+      return storyboards.length > 0 && storyboards.every(s => s.composedVideoUrl) ? 'done' : 'pending';
+    case 'merge':
+      return episode.status === 'merged' ? 'done' : 'pending';
+    case 'export':
+      return episode.status === 'merged' ? 'done' : 'pending';
     default:
       return 'pending';
   }
@@ -1364,10 +1388,8 @@ function renderStepContent(props: {
         />
       );
 
-    // ==================== Steps 8-10: Upcoming/Placeholder ====================
+    // ==================== Step 8: TTS ====================
     case 'tts':
-    case 'compose':
-    case 'merge':
       return (
         <UpcomingStepPanel
           stepKey={stepKey}
@@ -1377,32 +1399,62 @@ function renderStepContent(props: {
         />
       );
 
+    // ==================== Step 9: Compose ====================
+    case 'compose':
+      return (
+        <UpcomingStepPanel
+          stepKey={stepKey}
+          info={UPCOMING_STEP_INFO[stepKey]}
+          storyboards={props.storyboards}
+          characters={props.characters}
+        />
+      );
+
+    // ==================== Step 10: Merge ====================
+    case 'merge':
+      return (
+        <MergePanel
+          storyboards={props.storyboards.map(sb => ({
+            id: sb.id,
+            storyboardNumber: sb.storyboardNumber,
+            title: sb.title,
+            composedVideoUrl: sb.composedVideoUrl,
+            videoUrl: sb.videoUrl,
+            ttsAudioUrl: sb.ttsAudioUrl,
+            subtitleUrl: sb.subtitleUrl,
+            duration: sb.duration,
+            status: sb.status,
+            dialogue: sb.dialogue,
+            composedImage: sb.composedImage,
+          }))}
+          episodeId={props.episodeId}
+          loadData={props.loadData}
+        />
+      );
+
     // ==================== Step 11: Export ====================
     case 'export':
       return (
-        <div className="space-y-4">
-          <Card>
-            <CardContent className="p-8 text-center">
-              <div className="w-16 h-16 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center mx-auto mb-3">
-                <Check className="h-8 w-8 text-green-600 dark:text-green-400" />
-              </div>
-              <h3 className="text-lg font-medium">导出完成</h3>
-              <p className="text-sm text-muted-foreground mt-2">
-                短剧制作流程已完成，可导出最终成果
-              </p>
-              <div className="flex gap-3 justify-center mt-6">
-                <Button variant="outline" className="gap-2">
-                  <Eye className="h-4 w-4" />
-                  预览
-                </Button>
-                <Button className="gap-2">
-                  <Download className="h-4 w-4" />
-                  导出
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+        <ExportPanel
+          storyboards={props.storyboards.map(sb => ({
+            id: sb.id,
+            storyboardNumber: sb.storyboardNumber,
+            title: sb.title,
+            duration: sb.duration,
+            dialogue: sb.dialogue,
+            imagePrompt: sb.imagePrompt,
+            videoPrompt: sb.videoPrompt,
+            composedImage: sb.composedImage,
+            videoUrl: sb.videoUrl,
+            composedVideoUrl: sb.composedVideoUrl,
+            ttsAudioUrl: sb.ttsAudioUrl,
+          }))}
+          episodeId={props.episodeId}
+          episodeTitle={props.episode.title || ''}
+          dramaTitle={''}
+          duration={props.episode.duration}
+          status={props.episode.status}
+        />
       );
 
     default:
