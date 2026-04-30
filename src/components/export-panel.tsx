@@ -15,6 +15,8 @@ import {
   AlertCircle,
   Film,
   Clock,
+  Table,
+  Sparkles,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -101,6 +103,24 @@ const EXPORT_FORMATS: ExportFormat[] = [
     extension: '.txt',
     mimeType: 'text/plain',
     category: 'data',
+  },
+  {
+    key: 'csv',
+    label: 'CSV 分镜表',
+    description: '表格格式，可直接用 Excel 打开编辑',
+    icon: Table,
+    extension: '.csv',
+    mimeType: 'text/csv',
+    category: 'data',
+  },
+  {
+    key: 'prompt_list',
+    label: 'AI 提示词',
+    description: 'Markdown 格式，包含所有画面/视频提示词和配音文本',
+    icon: Sparkles,
+    extension: '.md',
+    mimeType: 'text/markdown',
+    category: 'media',
   },
 ];
 

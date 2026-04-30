@@ -14,7 +14,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const validFormats = ['srt', 'ass', 'json', 'script', 'storyboard_data'];
+    const validFormats = ['srt', 'ass', 'json', 'script', 'storyboard_data', 'csv', 'prompt_list'];
     if (!validFormats.includes(format)) {
       return NextResponse.json(
         { error: `Invalid format. Supported: ${validFormats.join(', ')}` },
@@ -119,6 +119,10 @@ function generateExport(episode: NonNullable<Awaited<ReturnType<typeof fetchEpis
       return generateScript(episode);
     case 'storyboard_data':
       return generateStoryboardData(episode);
+    case 'csv':
+      return generateCSV(episode);
+    case 'prompt_list':
+      return generatePromptList(episode);
     default:
       throw new Error(`Unsupported format: ${format}`);
   }
@@ -430,4 +434,147 @@ function formatASSTime(seconds: number): string {
   const s = Math.floor(seconds % 60);
   const cs = Math.floor((seconds % 1) * 100);
   return `${String(h).padStart(1, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
+}
+
+// ==================== CSV Generator ====================
+
+function generateCSV(episode: NonNullable<Awaited<ReturnType<typeof fetchEpisodeData>>>): ExportResult {
+  const lines: string[] = [];
+
+  // BOM for Excel UTF-8 support
+  lines.push('\uFEFF');
+
+  // Header
+  lines.push([
+    '分镜编号', '标题', '场景', '时间', '景别', '角度', '运镜', '动作',
+    '对话', '描述', '氛围', '时长(秒)', '出场角色', '画面提示词', '视频提示词',
+    '背景音乐', '音效', '有画面', '有视频', '有配音',
+  ].join(','));
+
+  for (const sb of episode.storyboards) {
+    const charNames = sb.characters.map((c) => c.character.name).filter(Boolean).join(';');
+    const row = [
+      sb.storyboardNumber,
+      escapeCSV(sb.title || ''),
+      escapeCSV(sb.location || ''),
+      escapeCSV(sb.time || ''),
+      escapeCSV(sb.shotType || ''),
+      escapeCSV(sb.angle || ''),
+      escapeCSV(sb.movement || ''),
+      escapeCSV(sb.action || ''),
+      escapeCSV(sb.dialogue || ''),
+      escapeCSV(sb.description || ''),
+      escapeCSV(sb.atmosphere || ''),
+      sb.duration || 5,
+      escapeCSV(charNames),
+      escapeCSV(sb.imagePrompt || ''),
+      escapeCSV(sb.videoPrompt || ''),
+      escapeCSV(sb.bgmPrompt || ''),
+      escapeCSV(sb.soundEffect || ''),
+      sb.composedImage ? '是' : '否',
+      (sb.videoUrl || sb.composedVideoUrl) ? '是' : '否',
+      sb.ttsAudioUrl ? '是' : '否',
+    ].join(',');
+    lines.push(row);
+  }
+
+  return {
+    content: lines.join('\n'),
+    filename: `第${episode.title || ''}集_分镜表.csv`,
+    mimeType: 'text/csv; charset=utf-8',
+  };
+}
+
+function escapeCSV(value: string): string {
+  if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
+// ==================== Prompt List Generator ====================
+// 导出纯文本提示词列表，方便批量使用于 AI 图片/视频生成工具
+
+function generatePromptList(episode: NonNullable<Awaited<ReturnType<typeof fetchEpisodeData>>>): ExportResult {
+  const lines: string[] = [];
+
+  lines.push(`# ${episode.drama?.title || '短剧'} - 第${episode.title || ''}集`);
+  lines.push(`# AI 提示词列表`);
+  lines.push(`# 导出时间: ${new Date().toLocaleString('zh-CN')}`);
+  lines.push('');
+
+  // Image prompts section
+  lines.push('## 画面生成提示词 (Image Prompts)');
+  lines.push('');
+  let hasImagePrompts = false;
+  for (const sb of episode.storyboards) {
+    if (sb.imagePrompt) {
+      hasImagePrompts = true;
+      const charNames = sb.characters.map((c) => c.character.name).filter(Boolean);
+      lines.push(`### 分镜 #${sb.storyboardNumber}: ${sb.title || '未命名'}`);
+      if (charNames.length > 0) {
+        lines.push(`角色: ${charNames.join(', ')}`);
+      }
+      if (sb.location || sb.time) {
+        lines.push(`场景: ${sb.location || ''} (${sb.time || ''})`);
+      }
+      lines.push('');
+      lines.push(sb.imagePrompt);
+      lines.push('');
+      lines.push('---');
+      lines.push('');
+    }
+  }
+  if (!hasImagePrompts) {
+    lines.push('(暂无画面提示词，请先在第6步生成)');
+    lines.push('');
+  }
+
+  // Video prompts section
+  lines.push('## 视频生成提示词 (Video Prompts)');
+  lines.push('');
+  let hasVideoPrompts = false;
+  for (const sb of episode.storyboards) {
+    if (sb.videoPrompt) {
+      hasVideoPrompts = true;
+      lines.push(`### 分镜 #${sb.storyboardNumber}: ${sb.title || '未命名'}`);
+      lines.push(`参考画面: ${sb.composedImage ? '已有' : '未生成'}`);
+      lines.push('');
+      lines.push(sb.videoPrompt);
+      lines.push('');
+      lines.push('---');
+      lines.push('');
+    }
+  }
+  if (!hasVideoPrompts) {
+    lines.push('(暂无视频提示词，请先在第7步生成)');
+    lines.push('');
+  }
+
+  // Dialogue list for TTS
+  lines.push('## 配音文本列表 (TTS Text)');
+  lines.push('');
+  let hasDialogue = false;
+  for (const sb of episode.storyboards) {
+    if (sb.dialogue) {
+      hasDialogue = true;
+      const charNames = sb.characters.map((c) => c.character.name).filter(Boolean);
+      const voiceStyle = sb.characters[0]?.character?.voiceStyle || '';
+      lines.push(`[分镜#${sb.storyboardNumber}] ${charNames.length > 0 ? charNames.join('/') + ': ' : ''}${sb.dialogue}`);
+      if (voiceStyle) {
+        lines.push(`  配音风格: ${voiceStyle}`);
+      }
+      lines.push(`  时长: ${sb.duration || 5}秒`);
+      lines.push('');
+    }
+  }
+  if (!hasDialogue) {
+    lines.push('(暂无对话内容)');
+  }
+
+  return {
+    content: lines.join('\n'),
+    filename: `第${episode.title || ''}集_AI提示词.md`,
+    mimeType: 'text/markdown; charset=utf-8',
+  };
 }
