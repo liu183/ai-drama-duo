@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { clearProviderCache } from '@/lib/ai-providers';
 
 // GET /api/ai-configs - List all AI service configs (filter by serviceType)
 export async function GET(request: NextRequest) {
@@ -57,6 +58,8 @@ export async function POST(request: NextRequest) {
       },
     });
 
+    clearProviderCache();
+
     return NextResponse.json({ data: aiConfig }, { status: 201 });
   } catch (error) {
     console.error('Error creating AI config:', error);
@@ -110,6 +113,8 @@ export async function PUT(
       data: updateData,
     });
 
+    clearProviderCache();
+
     return NextResponse.json({ data: updated });
   } catch (error) {
     console.error('Error updating AI config:', error);
@@ -142,6 +147,8 @@ export async function DELETE(
     await db.aiServiceConfig.delete({
       where: { id },
     });
+
+    clearProviderCache();
 
     return NextResponse.json({ message: 'AI config deleted successfully' });
   } catch (error) {

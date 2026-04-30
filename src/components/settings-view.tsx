@@ -14,6 +14,12 @@ import {
   Eye,
   EyeOff,
   Server,
+  Zap,
+  Plug,
+  ChevronDown,
+  ArrowUpDown,
+  CircleCheck,
+  CircleX,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -55,8 +61,15 @@ import {
 } from '@/components/ui/table';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import { aiConfigApi, agentConfigApi } from '@/lib/api';
 import { toast } from 'sonner';
+import {
+  PROVIDER_PRESETS,
+  getProvidersByType,
+  getModelsByProviderAndType,
+  type ProviderPreset,
+} from '@/lib/provider-presets';
 
 // ==================== Types ====================
 interface AiConfig {
@@ -82,10 +95,10 @@ interface AgentConfig {
 }
 
 const SERVICE_TYPES = [
-  { value: 'text', label: '文本' },
-  { value: 'image', label: '图片' },
-  { value: 'video', label: '视频' },
-  { value: 'audio', label: '音频' },
+  { value: 'text', label: '文本生成', icon: '📝' },
+  { value: 'image', label: '图片生成', icon: '🎨' },
+  { value: 'video', label: '视频生成', icon: '🎬' },
+  { value: 'audio', label: '语音合成', icon: '🎙️' },
 ];
 
 const SERVICE_TYPE_COLORS: Record<string, string> = {
@@ -100,6 +113,8 @@ const AGENT_TYPE_LABELS: Record<string, string> = {
   extractor: '角色提取',
   storyboard_breaker: '分镜拆解',
   voice_assigner: '配音分配',
+  image_prompt_generator: '画面提示词',
+  video_prompt_generator: '视频提示词',
 };
 
 // ==================== Component ====================
@@ -108,6 +123,7 @@ export default function SettingsView() {
   const [agentConfigs, setAgentConfigs] = useState<AgentConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [showApiKey, setShowApiKey] = useState<Record<string, boolean>>({});
+  const [activeServiceType, setActiveServiceType] = useState<string>('text');
 
   // AI Config dialog
   const [aiDialog, setAiDialog] = useState(false);
@@ -119,9 +135,15 @@ export default function SettingsView() {
     apiKey: '',
     baseUrl: '',
     model: '',
+    isActive: true,
+    priority: 10,
   });
   const [savingAi, setSavingAi] = useState(false);
   const [deleteAiId, setDeleteAiId] = useState<string | null>(null);
+
+  // Test connection
+  const [testing, setTesting] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<Record<string, { success: boolean; message: string }>>({});
 
   // Agent Config dialog
   const [agentDialog, setAgentDialog] = useState(false);
@@ -156,15 +178,49 @@ export default function SettingsView() {
     loadConfigs();
   }, [loadConfigs]);
 
+  // ==================== Provider Preset Helpers ====================
+  const availableProviders = getProvidersByType(aiForm.serviceType as 'text' | 'image' | 'video' | 'audio');
+  const availableModels = aiForm.provider
+    ? getModelsByProviderAndType(aiForm.provider, aiForm.serviceType as 'text' | 'image' | 'video' | 'audio')
+    : [];
+
+  const handleProviderPresetChange = (providerId: string) => {
+    const preset = PROVIDER_PRESETS.find(p => p.id === providerId);
+    if (preset) {
+      const modelsForType = preset.models.filter(m => m.type === aiForm.serviceType);
+      const defaultModel = modelsForType[0]?.modelId || '';
+      setAiForm({
+        ...aiForm,
+        provider: preset.id,
+        baseUrl: preset.baseUrl,
+        model: defaultModel,
+        name: aiForm.name || `${preset.name} - ${SERVICE_TYPES.find(s => s.value === aiForm.serviceType)?.label}`,
+      });
+    } else {
+      setAiForm({ ...aiForm, provider: providerId, baseUrl: '', model: '' });
+    }
+  };
+
   // ==================== AI Config Handlers ====================
   const openAiCreate = () => {
     setEditingAiConfig(null);
-    setAiForm({ name: '', serviceType: 'text', provider: '', apiKey: '', baseUrl: '', model: '' });
+    setTestResult({});
+    setAiForm({
+      name: '',
+      serviceType: activeServiceType,
+      provider: '',
+      apiKey: '',
+      baseUrl: '',
+      model: '',
+      isActive: true,
+      priority: 10,
+    });
     setAiDialog(true);
   };
 
   const openAiEdit = (config: AiConfig) => {
     setEditingAiConfig(config);
+    setTestResult({});
     setAiForm({
       name: config.name,
       serviceType: config.serviceType,
@@ -172,6 +228,8 @@ export default function SettingsView() {
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
       model: config.model,
+      isActive: config.isActive,
+      priority: config.priority,
     });
     setAiDialog(true);
   };
@@ -208,6 +266,70 @@ export default function SettingsView() {
       loadConfigs();
     } catch {
       toast.error('删除失败');
+    }
+  };
+
+  const handleToggleActive = async (config: AiConfig) => {
+    try {
+      await aiConfigApi.update(config.id, { isActive: !config.isActive });
+      toast.success(config.isActive ? '已禁用' : '已启用');
+      loadConfigs();
+    } catch {
+      toast.error('切换状态失败');
+    }
+  };
+
+  const handleTestConnection = async (configId?: string) => {
+    if (configId) {
+      // 测试已保存的配置
+      setTesting(configId);
+      setTestResult(prev => ({ ...prev, [configId]: { success: false, message: '测试中...' } }));
+      try {
+        const res = await fetch('/api/ai-configs/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: configId }),
+        });
+        const data = await res.json();
+        const result = data.data || data;
+        setTestResult(prev => ({ ...prev, [configId]: result }));
+        if (result.success) {
+          toast.success(result.message);
+        } else {
+          toast.error(result.message);
+        }
+      } catch {
+        setTestResult(prev => ({ ...prev, [configId]: { success: false, message: '测试请求失败' } }));
+        toast.error('测试请求失败');
+      } finally {
+        setTesting(null);
+      }
+    } else {
+      // 测试对话框中的临时配置
+      const tempId = 'temp-test';
+      setTesting(tempId);
+      setTestResult(prev => ({ ...prev, [tempId]: { success: false, message: '测试中...' } }));
+      try {
+        const res = await fetch('/api/ai-configs/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            serviceType: aiForm.serviceType,
+            provider: aiForm.provider,
+            apiKey: aiForm.apiKey,
+            baseUrl: aiForm.baseUrl,
+            model: aiForm.model,
+          }),
+        });
+        const data = await res.json();
+        const result = data.data || data;
+        setTestResult(prev => ({ ...prev, [tempId]: result }));
+        toast.success(result.success ? result.message : `测试失败: ${result.message}`);
+      } catch {
+        setTestResult(prev => ({ ...prev, [tempId]: { success: false, message: '测试请求失败' } }));
+      } finally {
+        setTesting(null);
+      }
     }
   };
 
@@ -261,6 +383,19 @@ export default function SettingsView() {
     }
   };
 
+  // 按服务类型过滤配置
+  const filteredConfigs = aiConfigs.filter(c => c.serviceType === activeServiceType);
+
+  const getPresetName = (providerId: string) => {
+    const preset = PROVIDER_PRESETS.find(p => p.id === providerId);
+    return preset?.name || providerId;
+  };
+
+  const getPresetIcon = (providerId: string) => {
+    const preset = PROVIDER_PRESETS.find(p => p.id === providerId);
+    return preset?.icon || '⚙️';
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -270,7 +405,7 @@ export default function SettingsView() {
           系统设置
         </h1>
         <p className="text-muted-foreground text-sm mt-1">
-          配置 AI 服务和 Agent 参数，优化短剧生成质量
+          配置 AI 模型供应商和 Agent 参数，支持多种文本、图片、视频、语音合成服务
         </p>
       </div>
 
@@ -278,7 +413,7 @@ export default function SettingsView() {
         <TabsList>
           <TabsTrigger value="ai-services" className="gap-1.5">
             <Cpu className="h-4 w-4" />
-            AI服务配置
+            模型供应商
           </TabsTrigger>
           <TabsTrigger value="agent-config" className="gap-1.5">
             <Bot className="h-4 w-4" />
@@ -291,61 +426,132 @@ export default function SettingsView() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
-                <CardTitle className="text-base">AI 服务配置</CardTitle>
-                <CardDescription>配置文本、图片、视频、音频等 AI 服务的接入参数</CardDescription>
+                <CardTitle className="text-base">模型供应商配置</CardTitle>
+                <CardDescription>
+                  添加并管理 AI 服务接入，系统将按优先级自动选择供应商
+                </CardDescription>
               </div>
               <Button size="sm" onClick={openAiCreate} className="gap-1.5">
                 <Plus className="h-3.5 w-3.5" />
-                添加服务
+                添加供应商
               </Button>
             </CardHeader>
             <CardContent>
+              {/* 服务类型过滤标签 */}
+              <div className="flex flex-wrap gap-2 mb-4">
+                {SERVICE_TYPES.map((st) => (
+                  <button
+                    key={st.value}
+                    onClick={() => setActiveServiceType(st.value)}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                      activeServiceType === st.value
+                        ? 'bg-primary text-primary-foreground shadow-sm'
+                        : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                    }`}
+                  >
+                    <span>{st.icon}</span>
+                    {st.label}
+                    <Badge variant="secondary" className="ml-1 text-xs px-1.5">
+                      {aiConfigs.filter(c => c.serviceType === st.value && c.isActive).length}
+                    </Badge>
+                  </button>
+                ))}
+              </div>
+
               {loading ? (
                 <div className="space-y-3">
                   {Array.from({ length: 3 }).map((_, i) => (
                     <Skeleton key={i} className="h-12 w-full" />
                   ))}
                 </div>
-              ) : aiConfigs.length === 0 ? (
+              ) : filteredConfigs.length === 0 ? (
                 <div className="text-center py-12">
                   <Server className="h-12 w-12 text-muted-foreground/30 mx-auto mb-3" />
-                  <p className="text-muted-foreground">暂无 AI 服务配置</p>
-                  <p className="text-sm text-muted-foreground/60 mt-1">
-                    添加 AI 服务以启用短剧生成功能
+                  <p className="text-muted-foreground">
+                    暂无 {SERVICE_TYPES.find(s => s.value === activeServiceType)?.label} 供应商
                   </p>
+                  <p className="text-sm text-muted-foreground/60 mt-1">
+                    点击「添加供应商」快速配置 {SERVICE_TYPES.find(s => s.value === activeServiceType)?.icon}
+                    {SERVICE_TYPES.find(s => s.value === activeServiceType)?.label} 服务
+                  </p>
+                  {/* 供应商推荐 */}
+                  <div className="mt-4 flex flex-wrap justify-center gap-2">
+                    {getProvidersByType(activeServiceType as 'text' | 'image' | 'video' | 'audio')
+                      .slice(0, 6)
+                      .map((p) => (
+                        <Badge key={p.id} variant="outline" className="text-xs py-1 px-2">
+                          {p.icon} {p.name}
+                        </Badge>
+                      ))}
+                  </div>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
                   <Table>
                     <TableHeader>
                       <TableRow>
+                        <TableHead className="w-[40px]">状态</TableHead>
                         <TableHead>名称</TableHead>
-                        <TableHead>类型</TableHead>
-                        <TableHead className="hidden md:table-cell">提供商</TableHead>
+                        <TableHead>供应商</TableHead>
                         <TableHead className="hidden md:table-cell">模型</TableHead>
-                        <TableHead>状态</TableHead>
+                        <TableHead className="w-[80px]">优先级</TableHead>
+                        <TableHead className="w-[80px]">测试</TableHead>
                         <TableHead>操作</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {aiConfigs.map((config) => (
-                        <TableRow key={config.id}>
+                      {filteredConfigs.map((config) => (
+                        <TableRow key={config.id} className={!config.isActive ? 'opacity-50' : ''}>
+                          <TableCell>
+                            <Switch
+                              checked={config.isActive}
+                              onCheckedChange={() => handleToggleActive(config)}
+                              className="data-[state=checked]:bg-green-500"
+                            />
+                          </TableCell>
                           <TableCell className="font-medium">{config.name}</TableCell>
                           <TableCell>
-                            <Badge className={`text-xs ${SERVICE_TYPE_COLORS[config.serviceType] || ''}`}>
-                              {SERVICE_TYPES.find(s => s.value === config.serviceType)?.label || config.serviceType}
-                            </Badge>
+                            <div className="flex items-center gap-1.5">
+                              <span>{getPresetIcon(config.provider)}</span>
+                              <span className="text-sm text-muted-foreground">
+                                {getPresetName(config.provider)}
+                              </span>
+                            </div>
                           </TableCell>
-                          <TableCell className="hidden md:table-cell text-muted-foreground">
-                            {config.provider || '-'}
-                          </TableCell>
-                          <TableCell className="hidden md:table-cell text-muted-foreground font-mono text-xs">
-                            {config.model || '-'}
+                          <TableCell className="hidden md:table-cell">
+                            <code className="text-xs bg-muted px-1.5 py-0.5 rounded font-mono">
+                              {config.model || '-'}
+                            </code>
                           </TableCell>
                           <TableCell>
-                            <Badge variant={config.isActive ? 'default' : 'secondary'} className="text-xs">
-                              {config.isActive ? '已启用' : '未启用'}
+                            <Badge variant="outline" className="text-xs">
+                              <ArrowUpDown className="h-3 w-3 mr-1" />
+                              {config.priority}
                             </Badge>
+                          </TableCell>
+                          <TableCell>
+                            {testResult[config.id] ? (
+                              <div className="flex items-center gap-1 text-xs">
+                                {testResult[config.id].success ? (
+                                  <CircleCheck className="h-4 w-4 text-green-500" />
+                                ) : (
+                                  <CircleX className="h-4 w-4 text-red-500" />
+                                )}
+                              </div>
+                            ) : null}
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
+                              onClick={() => handleTestConnection(config.id)}
+                              disabled={testing === config.id}
+                            >
+                              {testing === config.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Plug className="h-3.5 w-3.5" />
+                              )}
+                            </Button>
                           </TableCell>
                           <TableCell>
                             <div className="flex gap-1">
@@ -459,53 +665,115 @@ export default function SettingsView() {
       {/* AI Config Dialog */}
       <Dialog open={aiDialog} onOpenChange={(open) => {
         setAiDialog(open);
-        if (!open) setEditingAiConfig(null);
+        if (!open) { setEditingAiConfig(null); setTestResult({}); }
       }}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{editingAiConfig ? '编辑 AI 服务' : '添加 AI 服务'}</DialogTitle>
+            <DialogTitle>{editingAiConfig ? '编辑 AI 供应商' : '添加 AI 供应商'}</DialogTitle>
             <DialogDescription>
-              {editingAiConfig ? '修改 AI 服务配置' : '添加新的 AI 服务接入配置'}
+              {editingAiConfig ? '修改 AI 服务配置' : '选择供应商预设或自定义配置'}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
+            {/* 服务类型 + 启用状态 */}
             <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>名称 *</Label>
-                <Input
-                  value={aiForm.name}
-                  onChange={(e) => setAiForm({ ...aiForm, name: e.target.value })}
-                  placeholder="如：通义千问-文本"
-                />
-              </div>
               <div className="space-y-2">
                 <Label>服务类型</Label>
                 <Select
                   value={aiForm.serviceType}
-                  onValueChange={(v) => setAiForm({ ...aiForm, serviceType: v })}
+                  onValueChange={(v) => {
+                    setAiForm({
+                      ...aiForm,
+                      serviceType: v,
+                      provider: '',
+                      baseUrl: '',
+                      model: '',
+                    });
+                    setTestResult({});
+                  }}
                 >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
                   <SelectContent>
                     {SERVICE_TYPES.map((s) => (
-                      <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                      <SelectItem key={s.value} value={s.value}>
+                        {s.icon} {s.label}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
+              <div className="space-y-2">
+                <Label>优先级</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={aiForm.priority}
+                  onChange={(e) => setAiForm({ ...aiForm, priority: parseInt(e.target.value) || 0 })}
+                />
+                <p className="text-xs text-muted-foreground">数值越高优先级越高</p>
+              </div>
             </div>
+
+            {/* 供应商预设选择 */}
             <div className="space-y-2">
-              <Label>提供商</Label>
-              <Input
+              <Label>供应商预设</Label>
+              <Select
                 value={aiForm.provider}
-                onChange={(e) => setAiForm({ ...aiForm, provider: e.target.value })}
-                placeholder="如：dashscope、openai"
+                onValueChange={handleProviderPresetChange}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="选择供应商..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableProviders.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      <span className="flex items-center gap-2">
+                        <span>{p.icon}</span>
+                        <span>{p.name}</span>
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {aiForm.provider && (
+                <p className="text-xs text-muted-foreground">
+                  {(() => {
+                    const preset = PROVIDER_PRESETS.find(p => p.id === aiForm.provider);
+                    return preset?.description || '';
+                  })()}
+                </p>
+              )}
+            </div>
+
+            {/* 名称 */}
+            <div className="space-y-2">
+              <Label>配置名称 *</Label>
+              <Input
+                value={aiForm.name}
+                onChange={(e) => setAiForm({ ...aiForm, name: e.target.value })}
+                placeholder="如：通义千问-文本生成"
               />
             </div>
+
+            {/* Base URL */}
+            <div className="space-y-2">
+              <Label>Base URL</Label>
+              <Input
+                value={aiForm.baseUrl}
+                onChange={(e) => setAiForm({ ...aiForm, baseUrl: e.target.value })}
+                placeholder="https://api.example.com/v1"
+              />
+            </div>
+
+            {/* API Key */}
             <div className="space-y-2">
               <Label>API Key</Label>
               <div className="relative">
                 <Input
-                  type={showApiKey['ai'] ? 'text' : 'password'}
+                  type={showApiKey['dialog'] ? 'text' : 'password'}
                   value={aiForm.apiKey}
                   onChange={(e) => setAiForm({ ...aiForm, apiKey: e.target.value })}
                   placeholder="输入 API Key"
@@ -515,35 +783,89 @@ export default function SettingsView() {
                   variant="ghost"
                   size="icon"
                   className="absolute right-0 top-0 h-full w-9"
-                  onClick={() => setShowApiKey({ ...showApiKey, ai: !showApiKey['ai'] })}
+                  onClick={() => setShowApiKey({ ...showApiKey, dialog: !showApiKey['dialog'] })}
                 >
-                  {showApiKey['ai'] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  {showApiKey['dialog'] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </Button>
               </div>
             </div>
-            <div className="space-y-2">
-              <Label>Base URL</Label>
-              <Input
-                value={aiForm.baseUrl}
-                onChange={(e) => setAiForm({ ...aiForm, baseUrl: e.target.value })}
-                placeholder="https://api.example.com/v1"
-              />
-            </div>
+
+            {/* 模型选择 */}
             <div className="space-y-2">
               <Label>模型</Label>
+              {availableModels.length > 0 ? (
+                <Select
+                  value={aiForm.model}
+                  onValueChange={(v) => setAiForm({ ...aiForm, model: v })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="选择模型..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableModels.map((m) => (
+                      <SelectItem key={m.modelId} value={m.modelId}>
+                        <span className="flex flex-col">
+                          <span>{m.label}</span>
+                          {m.description && (
+                            <span className="text-xs text-muted-foreground">{m.description}</span>
+                          )}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : null}
               <Input
                 value={aiForm.model}
                 onChange={(e) => setAiForm({ ...aiForm, model: e.target.value })}
-                placeholder="如：qwen-max、gpt-4o"
+                placeholder={
+                  availableModels.length > 0
+                    ? '或手动输入模型名称'
+                    : '输入模型名称，如 qwen-max、gpt-4o'
+                }
+                className={availableModels.length > 0 ? 'mt-1' : ''}
               />
             </div>
+
+            {/* 连接测试结果 */}
+            {testResult['temp-test'] && (
+              <div className={`p-3 rounded-lg text-sm ${
+                testResult['temp-test'].success
+                  ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400'
+                  : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400'
+              }`}>
+                <div className="flex items-center gap-2">
+                  {testResult['temp-test'].success ? (
+                    <CircleCheck className="h-4 w-4" />
+                  ) : (
+                    <CircleX className="h-4 w-4" />
+                  )}
+                  {testResult['temp-test'].message}
+                </div>
+              </div>
+            )}
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setAiDialog(false)}>取消</Button>
-            <Button onClick={handleSaveAi} disabled={savingAi} className="gap-1.5">
-              {savingAi ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              保存
+          <DialogFooter className="flex justify-between">
+            <Button
+              variant="outline"
+              onClick={() => handleTestConnection()}
+              disabled={testing === 'temp-test' || !aiForm.baseUrl || !aiForm.apiKey}
+              className="gap-1.5"
+            >
+              {testing === 'temp-test' ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Plug className="h-4 w-4" />
+              )}
+              测试连接
             </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setAiDialog(false)}>取消</Button>
+              <Button onClick={handleSaveAi} disabled={savingAi} className="gap-1.5">
+                {savingAi ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                保存
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -591,7 +913,7 @@ export default function SettingsView() {
                 <Input
                   value={agentForm.model}
                   onChange={(e) => setAgentForm({ ...agentForm, model: e.target.value })}
-                  placeholder="默认模型"
+                  placeholder="留空使用默认供应商"
                 />
               </div>
               <div className="space-y-2">
@@ -645,7 +967,7 @@ export default function SettingsView() {
           <AlertDialogHeader>
             <AlertDialogTitle>确认删除</AlertDialogTitle>
             <AlertDialogDescription>
-              确定要删除该 AI 服务配置吗？此操作无法撤销。
+              确定要删除该 AI 供应商配置吗？此操作无法撤销。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

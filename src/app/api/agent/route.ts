@@ -1,23 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-
-// Dual-mode AI call:
-// - Z.ai platform (has /etc/.z-ai-config): use z-ai-web-dev-sdk
-// - Vercel / external (has NVIDIA_* env vars): call NVIDIA API directly via fetch
-let ZAI: typeof import('z-ai-web-dev-sdk').default | null = null;
-try {
-  // Only import SDK if we're NOT on Vercel (avoids config file issues)
-  if (!process.env.VERCEL) {
-    ZAI = (await import('z-ai-web-dev-sdk')).default;
-  }
-} catch {
-  // SDK not available, will use direct API calls
-}
-
-const isZAIPlatform = !process.env.VERCEL && !!ZAI;
+import { generateText } from '@/lib/ai-providers';
 
 /**
- * Call LLM - returns the assistant message content
+ * Call LLM - 使用统一供应商系统，支持多供应商 fallback
  */
 async function callLLM(options: {
   systemPrompt: string;
@@ -26,53 +12,14 @@ async function callLLM(options: {
   maxTokens?: number;
   model?: string;
 }): Promise<string> {
-  if (isZAIPlatform && ZAI) {
-    // Mode 1: Z.ai platform - use z-ai-web-dev-sdk
-    const zai = await ZAI.create();
-    const completion = await zai.chat.completions.create({
-      messages: [
-        { role: 'system', content: options.systemPrompt },
-        { role: 'user', content: options.userMessage },
-      ],
-      temperature: options.temperature,
-      max_tokens: options.maxTokens,
-    });
-    return completion.choices?.[0]?.message?.content || '';
-  }
-
-  // Mode 2: Vercel / External - call NVIDIA API directly
-  const baseUrl = (process.env.NVIDIA_BASE_URL || '').replace(/\/+$/, '');
-  const apiKey = process.env.NVIDIA_API_KEY || '';
-  const model = options.model || process.env.NVIDIA_MODEL || 'nvidia/llama-3.1-nemotron-70b-instruct';
-
-  if (!baseUrl || !apiKey) {
-    throw new Error('AI configuration missing. Set NVIDIA_BASE_URL and NVIDIA_API_KEY environment variables.');
-  }
-
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: options.systemPrompt },
-        { role: 'user', content: options.userMessage },
-      ],
-      temperature: options.temperature ?? 0.7,
-      max_tokens: options.maxTokens ?? 4096,
-    }),
+  const result = await generateText({
+    systemPrompt: options.systemPrompt,
+    userMessage: options.userMessage,
+    temperature: options.temperature,
+    maxTokens: options.maxTokens,
+    model: options.model,
   });
-
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`NVIDIA API error ${response.status}: ${errorBody}`);
-  }
-
-  const data = await response.json();
-  return data.choices?.[0]?.message?.content || '';
+  return result.content;
 }
 
 // Helper: Extract JSON from LLM response (handles markdown code blocks)
@@ -629,12 +576,13 @@ ${message || '请根据以上分镜信息，为每个分镜生成英文视频提
     const temperature = agentConfig?.temperature ?? 0.7;
     const maxTokens = agentConfig?.maxTokens ?? 4096;
 
-    // Call LLM (auto-selects Z.ai SDK or NVIDIA API based on environment)
+    // Call LLM using unified provider system (DB configs + fallback chain)
     const result = await callLLM({
       systemPrompt,
       userMessage: contextMessage,
       temperature,
       maxTokens: maxTokens,
+      model: agentConfig?.model || undefined,
     });
 
     // Save agent chat log
