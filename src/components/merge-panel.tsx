@@ -4,7 +4,6 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Package,
-  Play,
   Check,
   Loader2,
   Clock,
@@ -22,8 +21,18 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
+import { Switch } from '@/components/ui/switch';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { toast } from 'sonner';
 import { mergeApi } from '@/lib/api';
+import { formatDuration } from '@/lib/utils';
+import { TRANSITION_OPTIONS } from '@/lib/constants';
 
 // ==================== Types ====================
 interface MergeStoryboard {
@@ -140,12 +149,6 @@ export default function MergePanel({ storyboards, episodeId, loadData }: MergePa
     });
   };
 
-  const formatDuration = (seconds: number) => {
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    return m > 0 ? `${m}分${s}秒` : `${s}秒`;
-  };
-
   return (
     <div className="space-y-4">
       {/* Stats Overview */}
@@ -194,16 +197,17 @@ export default function MergePanel({ storyboards, episodeId, loadData }: MergePa
               <p className="text-sm font-medium">转场效果</p>
               <p className="text-xs text-muted-foreground">分镜之间的过渡方式</p>
             </div>
-            <select
+            <Select
               value={mergeConfig.transition}
-              onChange={(e) => setMergeConfig({ ...mergeConfig, transition: e.target.value })}
-              className="text-sm border rounded-md px-3 py-1.5 bg-background"
+              onValueChange={(v) => setMergeConfig({ ...mergeConfig, transition: v })}
             >
-              <option value="none">无转场</option>
-              <option value="fade">淡入淡出</option>
-              <option value="dissolve">溶解</option>
-              <option value="wipe">擦除</option>
-            </select>
+              <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {TRANSITION_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <Separator />
           <div className="flex items-center justify-between">
@@ -211,18 +215,10 @@ export default function MergePanel({ storyboards, episodeId, loadData }: MergePa
               <p className="text-sm font-medium">背景音乐</p>
               <p className="text-xs text-muted-foreground">为合并后的视频添加背景音乐</p>
             </div>
-            <button
-              onClick={() => setMergeConfig({ ...mergeConfig, addBgm: !mergeConfig.addBgm })}
-              className={`relative w-10 h-5 rounded-full transition-colors ${
-                mergeConfig.addBgm ? 'bg-primary' : 'bg-muted'
-              }`}
-            >
-              <motion.div
-                className="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow"
-                animate={{ left: mergeConfig.addBgm ? 22 : 2 }}
-                transition={{ duration: 0.2 }}
-              />
-            </button>
+            <Switch
+              checked={mergeConfig.addBgm}
+              onCheckedChange={(checked) => setMergeConfig({ ...mergeConfig, addBgm: checked })}
+            />
           </div>
           {mergeConfig.addBgm && (
             <motion.div

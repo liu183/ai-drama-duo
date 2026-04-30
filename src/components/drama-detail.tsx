@@ -72,183 +72,35 @@ import {
 } from '@/lib/api';
 import { toast } from 'sonner';
 import type { DramaItem } from './drama-list';
-
-// ==================== Utilities ====================
-async function copyToClipboard(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    const textarea = document.createElement('textarea');
-    textarea.value = text;
-    textarea.style.position = 'fixed';
-    textarea.style.opacity = '0';
-    document.body.appendChild(textarea);
-    textarea.select();
-    try {
-      document.execCommand('copy');
-      return true;
-    } catch {
-      return false;
-    } finally {
-      document.body.removeChild(textarea);
-    }
-  }
-}
-
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-// ==================== Types ====================
-interface Episode {
-  id: string;
-  episodeNumber: number;
-  title: string;
-  content: string;
-  scriptContent: string;
-  status: string;
-  duration: number;
-}
-
-interface CharacterAppearance {
-  text?: string;
-  gender?: string;
-  ageRange?: string;
-  hairStyle?: string;
-  eyeColor?: string;
-  skinTone?: string;
-  bodyType?: string;
-  clothing?: string;
-  distinguishing?: string;
-  promptEn?: string;
-}
-
-interface Character {
-  id: string;
-  name: string;
-  role: string;
-  description: string;
-  appearance: string;
-  personality: string;
-  voiceStyle: string;
-  voiceProvider: string;
-  imageUrl: string;
-  referenceImages: string;
-  seedValue: string;
-  sortOrder: number;
-}
-
-interface ScenePrompt {
-  text?: string;
-  environmentType?: string;
-  architecturalStyle?: string;
-  lighting?: string;
-  weather?: string;
-  season?: string;
-  colorTone?: string;
-  keyProps?: string;
-  promptEn?: string;
-}
-
-interface Scene {
-  id: string;
-  location: string;
-  time: string;
-  prompt: string;
-  status: string;
-  storyboardCount: number;
-  imageUrl: string;
-}
-
-interface ImageStyleConfig {
-  aspectRatio: string;
-  qualityKeywords: string;
-  negativePrompts: string;
-  stylePromptPrefix: string;
-}
-
-interface DramaDetail extends DramaItem {
-  episodes?: Episode[];
-  characters?: Character[];
-  scenes?: Scene[];
-  _count?: { episodes: number; characters: number; scenes: number };
-  metadata?: string;
-}
-
-type DramaDetailProps = {
-  dramaId: string;
-  onBack: () => void;
-  onEnterStudio: (dramaId: string, episodeId: string, episodeNumber: number) => void;
-  refreshKey?: number;
-};
-
-const STATUS_MAP: Record<string, { label: string; color: string }> = {
-  draft: { label: '草稿', color: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300' },
-  in_progress: { label: '进行中', color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' },
-  scripted: { label: '已编剧', color: 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400' },
-  completed: { label: '已完成', color: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' },
-  failed: { label: '失败', color: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' },
-  pending: { label: '待处理', color: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300' },
-};
-
-const ROLE_MAP: Record<string, string> = {
-  protagonist: '主角',
-  antagonist: '反派',
-  supporting: '配角',
-  extra: '群演',
-};
-
-const GENRES = ['都市', '古装', '玄幻', '悬疑', '甜宠', '搞笑', '励志', '科幻', '其他'];
-
-const STYLES = [
-  { value: 'realistic', label: '真实' },
-  { value: 'anime', label: '动漫' },
-  { value: 'ghibli', label: '吉卜力' },
-  { value: 'cinematic', label: '电影' },
-  { value: 'comic', label: '漫画' },
-  { value: 'watercolor', label: '水彩' },
-];
-
-const STATUS_OPTIONS = [
-  { value: 'draft', label: '草稿' },
-  { value: 'in_progress', label: '进行中' },
-  { value: 'completed', label: '已完成' },
-  { value: 'failed', label: '失败' },
-];
-
-const ASPECT_RATIOS = [
-  { value: '16:9', label: '16:9 横屏' },
-  { value: '9:16', label: '9:16 竖屏' },
-  { value: '1:1', label: '1:1 方形' },
-  { value: '4:3', label: '4:3 经典' },
-  { value: '3:4', label: '3:4 竖版经典' },
-];
-
-const DEFAULT_STYLE_CONFIG: ImageStyleConfig = {
-  aspectRatio: '16:9',
-  qualityKeywords: '8K UHD, masterpiece, best quality, ultra detailed',
-  negativePrompts: 'blurry, low quality, watermark, text, distorted face, extra fingers',
-  stylePromptPrefix: 'cinematic, dramatic lighting, film grain, shallow depth of field',
-};
+import type {
+  Episode,
+  Character,
+  CharacterAppearance,
+  Scene,
+  ScenePrompt,
+  ImageStyleConfig,
+  DramaDetail,
+} from '@/types';
+import {
+  STATUS_MAP,
+  ROLE_MAP,
+  GENRES,
+  STYLES,
+  STATUS_OPTIONS,
+  ASPECT_RATIOS,
+  DEFAULT_STYLE_CONFIG,
+} from '@/lib/constants';
+import {
+  copyToClipboard,
+  fileToBase64,
+  tryParseJSON,
+  parseReferenceImages,
+  generateSeedValue,
+} from '@/lib/utils';
 
 // ==================== Helper Functions ====================
 function parseAppearanceJSON(raw: string): CharacterAppearance {
-  if (!raw) return { text: '' };
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as CharacterAppearance;
-    }
-    return { text: raw };
-  } catch {
-    return { text: raw };
-  }
+  return tryParseJSON<CharacterAppearance>(raw, { text: raw });
 }
 
 function serializeAppearance(appearance: CharacterAppearance): string {
@@ -256,16 +108,7 @@ function serializeAppearance(appearance: CharacterAppearance): string {
 }
 
 function parseScenePromptJSON(raw: string): ScenePrompt {
-  if (!raw) return { text: '' };
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as ScenePrompt;
-    }
-    return { text: raw };
-  } catch {
-    return { text: raw };
-  }
+  return tryParseJSON<ScenePrompt>(raw, { text: raw });
 }
 
 function serializeScenePrompt(prompt: ScenePrompt): string {
@@ -273,26 +116,7 @@ function serializeScenePrompt(prompt: ScenePrompt): string {
 }
 
 function parseDramaMetadata(raw: string | undefined): { imageStyle?: ImageStyleConfig } {
-  if (!raw) return {};
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return {};
-  }
-}
-
-function parseReferenceImages(raw: string): string[] {
-  if (!raw) return [];
-  try {
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr : [];
-  } catch {
-    return [];
-  }
-}
-
-function generateSeedValue(): string {
-  return String(Math.floor(10000000 + Math.random() * 90000000));
+  return tryParseJSON(raw, {});
 }
 
 function generateCharacterPromptEn(a: CharacterAppearance): string {
@@ -416,6 +240,13 @@ function ImageUploader({
 }
 
 // ==================== Main Component ====================
+type DramaDetailProps = {
+  dramaId: string;
+  onBack: () => void;
+  onEnterStudio: (dramaId: string, episodeId: string, episodeNumber: number) => void;
+  refreshKey?: number;
+};
+
 export default function DramaDetailView({
   dramaId,
   onBack,
@@ -606,7 +437,7 @@ export default function DramaDetailView({
       personality: char.personality,
       imageUrl: char.imageUrl,
       referenceImages: refImages,
-      seedValue: char.seedValue,
+      seedValue: char.seedValue || '',
     });
     setCharDialog(true);
   };
@@ -698,7 +529,7 @@ export default function DramaDetailView({
   const handleDeleteScene = async () => {
     if (!deleteSceneId) return;
     try {
-      await fetch(`/api/scenes/${deleteSceneId}`, { method: 'DELETE' });
+      await sceneApi.delete(deleteSceneId);
       toast.success('场景删除成功');
       setDeleteSceneId(null);
       loadDrama();
@@ -714,7 +545,7 @@ export default function DramaDetailView({
       location: scene.location,
       time: scene.time,
       prompt,
-      imageUrl: scene.imageUrl,
+      imageUrl: scene.imageUrl || '',
     });
     setSceneDialog(true);
   };

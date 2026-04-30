@@ -4,7 +4,6 @@ import React, { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import {
   Link2,
-  Play,
   Check,
   Loader2,
   Clock,
@@ -12,7 +11,6 @@ import {
   Music,
   Subtitles,
   Image,
-  AlertCircle,
   RefreshCw,
   Settings,
 } from 'lucide-react';
@@ -21,8 +19,18 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
+import { Switch } from '@/components/ui/switch';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { toast } from 'sonner';
 import { storyboardApi, fetchAPI } from '@/lib/api';
+import { formatDuration } from '@/lib/utils';
+import { RESOLUTION_OPTIONS } from '@/lib/constants';
 
 // ==================== Types ====================
 interface ComposeStoryboard {
@@ -109,12 +117,6 @@ export default function ComposePanel({ storyboards, episodeId, loadData }: Compo
     }
   };
 
-  const formatDuration = (seconds: number) => {
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    return m > 0 ? `${m}分${s}秒` : `${s}秒`;
-  };
-
   return (
     <div className="space-y-4">
       {/* Stats Overview */}
@@ -170,16 +172,17 @@ export default function ComposePanel({ storyboards, episodeId, loadData }: Compo
               <p className="text-sm font-medium">输出分辨率</p>
               <p className="text-xs text-muted-foreground">合成视频的画面分辨率</p>
             </div>
-            <select
+            <Select
               value={config.resolution}
-              onChange={(e) => setConfig({ ...config, resolution: e.target.value })}
-              className="text-sm border rounded-md px-3 py-1.5 bg-background"
+              onValueChange={(v) => setConfig({ ...config, resolution: v })}
             >
-              <option value="1920x1080">1920x1080 (1080P)</option>
-              <option value="1280x720">1280x720 (720P)</option>
-              <option value="1080x1920">1080x1920 (竖屏)</option>
-              <option value="720x1280">720x1280 (竖屏720)</option>
-            </select>
+              <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {RESOLUTION_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <Separator />
           <div className="flex items-center justify-between">
@@ -187,16 +190,10 @@ export default function ComposePanel({ storyboards, episodeId, loadData }: Compo
               <p className="text-sm font-medium">添加字幕</p>
               <p className="text-xs text-muted-foreground">将对话内容作为字幕叠加到画面上</p>
             </div>
-            <button
-              onClick={() => setConfig({ ...config, addSubtitles: !config.addSubtitles })}
-              className={`relative w-10 h-5 rounded-full transition-colors ${config.addSubtitles ? 'bg-primary' : 'bg-muted'}`}
-            >
-              <motion.div
-                className="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow"
-                animate={{ left: config.addSubtitles ? 22 : 2 }}
-                transition={{ duration: 0.2 }}
-              />
-            </button>
+            <Switch
+              checked={config.addSubtitles}
+              onCheckedChange={(checked) => setConfig({ ...config, addSubtitles: checked })}
+            />
           </div>
           <Separator />
           <div className="flex items-center justify-between">
@@ -204,16 +201,10 @@ export default function ComposePanel({ storyboards, episodeId, loadData }: Compo
               <p className="text-sm font-medium">混音</p>
               <p className="text-xs text-muted-foreground">将配音与原视频音轨混合</p>
             </div>
-            <button
-              onClick={() => setConfig({ ...config, audioMix: !config.audioMix })}
-              className={`relative w-10 h-5 rounded-full transition-colors ${config.audioMix ? 'bg-primary' : 'bg-muted'}`}
-            >
-              <motion.div
-                className="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow"
-                animate={{ left: config.audioMix ? 22 : 2 }}
-                transition={{ duration: 0.2 }}
-              />
-            </button>
+            <Switch
+              checked={config.audioMix}
+              onCheckedChange={(checked) => setConfig({ ...config, audioMix: checked })}
+            />
           </div>
         </CardContent>
       </Card>

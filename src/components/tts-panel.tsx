@@ -19,6 +19,7 @@ import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { toast } from 'sonner';
 import { storyboardApi } from '@/lib/api';
+import { formatDuration } from '@/lib/utils';
 
 // ==================== Types ====================
 interface TTSStoryboard {
@@ -55,12 +56,6 @@ export default function TTSPanel({ storyboards, characters, episodeId, loadData 
     const totalDuration = storyboards.reduce((sum, s) => sum + (s.duration || 0), 0);
     return { total, withDialogue, withAudio, totalDuration };
   }, [storyboards]);
-
-  const formatDuration = (seconds: number) => {
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    return m > 0 ? `${m}分${s}秒` : `${s}秒`;
-  };
 
   const handleUploadClick = (sbId: string) => {
     fileInputRefs.current[sbId]?.click();
@@ -162,9 +157,8 @@ export default function TTSPanel({ storyboards, characters, episodeId, loadData 
       } else {
         toast.error(data.error || data.message || '配音生成失败');
       }
-    } catch (err) {
+    } catch {
       toast.error('配音生成请求失败，请重试');
-      console.error('TTS gen error:', err);
     } finally {
       setGeneratingId(null);
     }

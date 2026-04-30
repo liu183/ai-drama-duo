@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { formatSRTTime } from '@/lib/time-utils';
 
 // POST /api/merge - Merge storyboard composed videos into a single episode video
 export async function POST(request: NextRequest) {
@@ -88,14 +89,6 @@ export async function POST(request: NextRequest) {
     const finalDuration = totalDuration + transitionOverhead;
 
     // Generate SRT for the merged video
-    function formatSRTTime(seconds: number): string {
-      const h = Math.floor(seconds / 3600);
-      const m = Math.floor((seconds % 3600) / 60);
-      const s = Math.floor(seconds % 60);
-      const ms = Math.floor((seconds % 1) * 1000);
-      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
-    }
-
     const srtLines: string[] = [];
     let currentTime = 0;
     let subtitleIndex = 1;

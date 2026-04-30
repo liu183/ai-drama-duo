@@ -167,6 +167,7 @@ export default function ExportPanel({
   const handleExportAll = async () => {
     setExporting('all');
     let successCount = 0;
+    const failedFormats: string[] = [];
 
     for (const format of EXPORT_FORMATS) {
       try {
@@ -181,16 +182,16 @@ export default function ExportPanel({
         successCount++;
         setExportedFormats((prev) => new Set(prev).add(format.key));
       } catch {
-        // Skip failed exports
+        failedFormats.push(format.label);
       }
     }
 
     setExporting(null);
 
-    if (successCount === EXPORT_FORMATS.length) {
+    if (failedFormats.length === 0) {
       toast.success(`全部 ${successCount} 个格式导出成功`);
     } else {
-      toast.success(`已导出 ${successCount}/${EXPORT_FORMATS.length} 个格式`);
+      toast.warning(`已导出 ${successCount}/${EXPORT_FORMATS.length} 个格式，失败: ${failedFormats.join(', ')}`);
     }
   };
 

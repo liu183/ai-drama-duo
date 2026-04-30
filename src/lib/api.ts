@@ -62,6 +62,8 @@ export const sceneApi = {
     fetchAPI('/scenes', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: string, data: Record<string, unknown>) =>
     fetchAPI(`/scenes/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  delete: (id: string) =>
+    fetchAPI(`/scenes/${id}`, { method: 'DELETE' }),
   batchUpsert: (data: Record<string, unknown>[]) =>
     fetchAPI('/scenes?action=batch', {
       method: 'PUT',
