@@ -109,7 +109,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     description: '小米大模型 MiMo 系列，支持文本生成和语音合成（TTS），OpenAI 兼容接口',
     category: 'domestic',
     supportedTypes: ['text', 'audio'],
-    baseUrl: 'https://api.ai.mi.com/v1',
+    baseUrl: 'https://token-plan-ams.xiaomimimo.com/v1',
     docsUrl: 'https://dev.mi.com/docus/overview/milm/',
     models: [
       // V2.5 系列
@@ -120,7 +120,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
       { type: 'audio', modelId: 'MiMo-V2.5-TTS', label: 'MiMo-V2.5-TTS', description: '标准语音合成' },
       // V2 系列
       { type: 'text', modelId: 'MiMo-V2-Pro', label: 'MiMo-V2-Pro', description: 'V2旗舰推理' },
-      { type: 'text', modelId: 'MiMo-V2', label: 'MiMo-V2', description: 'V2标准对话' },
+      { type: 'text', modelId: 'MiMo-V2-Omni', label: 'MiMo-V2-Omni', description: 'V2多模态模型' },
       { type: 'audio', modelId: 'MiMo-V2-TTS', label: 'MiMo-V2-TTS', description: 'V2语音合成' },
     ],
   },
