@@ -25,6 +25,10 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      // 查找预设以获取 authType 和 apiFormat
+      const { getProviderPreset } = await import('@/lib/provider-presets');
+      const preset = getProviderPreset(config.provider);
+
       const providerConfig: ProviderConfig = {
         id: config.id,
         name: config.name,
@@ -36,6 +40,8 @@ export async function POST(request: NextRequest) {
         isActive: config.isActive,
         priority: config.priority,
         config: parseJsonConfig(config.config),
+        authType: preset?.authType,
+        apiFormat: preset?.apiFormat,
       };
 
       const result = await testConnectionByType(providerConfig);
@@ -50,6 +56,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // 查找预设以获取 authType 和 apiFormat
+    const { getProviderPreset } = await import('@/lib/provider-presets');
+    const preset = getProviderPreset(provider);
+
     const tempConfig: ProviderConfig = {
       id: 'temp',
       name: '临时测试',
@@ -61,6 +71,8 @@ export async function POST(request: NextRequest) {
       isActive: true,
       priority: 0,
       config: {},
+      authType: preset?.authType,
+      apiFormat: preset?.apiFormat,
     };
 
     const result = await testConnectionByType(tempConfig);

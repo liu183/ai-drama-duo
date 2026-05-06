@@ -152,6 +152,16 @@ export default function SettingsView() {
   const [testing, setTesting] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<Record<string, { success: boolean; message: string }>>({});
 
+  // Dynamic model fetching
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [fetchedModels, setFetchedModels] = useState<Array<{ id: string; label: string; description?: string }>>([]);
+  const [modelSource, setModelSource] = useState<'preset' | 'api'>('preset');
+
+  // Auto-fetch models when apiKey + baseUrl are ready
+  const autoFetchTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+  const prevApiKeyRef = React.useRef('');
+  const prevBaseUrlRef = React.useRef('');
+
   // Provider category filter in dialog
   const [providerCategoryFilter, setProviderCategoryFilter] = useState<'all' | 'domestic' | 'international'>('all');
 
@@ -200,9 +210,14 @@ export default function SettingsView() {
   const internationalProviders = filteredAvailableProviders.filter(p => p.category === 'international');
   const customProviders = filteredAvailableProviders.filter(p => p.category === 'custom');
 
-  const availableModels = aiForm.provider
+  const presetModels = aiForm.provider
     ? getModelsByProviderAndType(aiForm.provider, aiForm.serviceType as 'text' | 'image' | 'video' | 'audio')
     : [];
+
+  // 如果有动态拉取的模型，优先使用；否则使用预设模型
+  const availableModels = fetchedModels.length > 0
+    ? fetchedModels
+    : presetModels.map(m => ({ id: m.modelId, label: m.label, description: m.description }));
 
   const handleProviderPresetChange = (providerId: string) => {
     const preset = PROVIDER_PRESETS.find(p => p.id === providerId);
@@ -216,15 +231,76 @@ export default function SettingsView() {
         model: defaultModel,
         name: aiForm.name || `${preset.name} - ${SERVICE_TYPES.find(s => s.value === aiForm.serviceType)?.label}`,
       });
+      // 重置动态模型
+      setFetchedModels([]);
+      setModelSource('preset');
+      // 如果已有 apiKey，自动拉取
+      if (aiForm.apiKey) {
+        setTimeout(() => handleFetchModels(), 300);
+      }
     } else {
       setAiForm({ ...aiForm, provider: providerId, baseUrl: '', model: '' });
+      setFetchedModels([]);
+      setModelSource('preset');
     }
   };
+
+  // ==================== Dynamic Model Fetching ====================
+  const handleFetchModels = async () => {
+    if (!aiForm.baseUrl || !aiForm.apiKey) return;
+    setFetchingModels(true);
+    try {
+      const res = await fetch('/api/ai-configs/fetch-models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          baseUrl: aiForm.baseUrl,
+          apiKey: aiForm.apiKey,
+          provider: aiForm.provider,
+          serviceType: aiForm.serviceType,
+        }),
+      });
+      const data = await res.json();
+      const result = data.data || data;
+      if (result.success && result.models?.length > 0) {
+        setFetchedModels(result.models);
+        setModelSource(result.source || 'api');
+        // 如果当前模型不在新列表中，自动选择第一个
+        const modelIds = result.models.map((m: { id: string }) => m.id);
+        if (!modelIds.includes(aiForm.model)) {
+          setAiForm(prev => ({ ...prev, model: result.models[0].id }));
+        }
+      } else {
+        // 拉取失败，保留预设模型
+        setFetchedModels([]);
+        setModelSource('preset');
+      }
+    } catch {
+ setFetchedModels([]);
+      setModelSource('preset');
+    } finally {
+      setFetchingModels(false);
+    }
+  };
+
+  // 自动拉取：apiKey 或 baseUrl 变化时，延迟 1.5s 自动拉取
+  useEffect(() => {
+    if (autoFetchTimerRef.current) clearTimeout(autoFetchTimerRef.current);
+    prevApiKeyRef.current = aiForm.apiKey;
+    prevBaseUrlRef.current = aiForm.baseUrl;
+    if (aiForm.apiKey && aiForm.baseUrl && aiForm.provider) {
+      autoFetchTimerRef.current = setTimeout(() => handleFetchModels(), 1500);
+    }
+    return () => { if (autoFetchTimerRef.current) clearTimeout(autoFetchTimerRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiForm.apiKey, aiForm.baseUrl, aiForm.provider, aiForm.serviceType]);
 
   // ==================== AI Config Handlers ====================
   const openAiCreate = () => {
     setEditingAiConfig(null);
     setTestResult({});
+    setFetchedModels([]);
+    setModelSource('preset');
     setProviderCategoryFilter('all');
     setAiForm({
       name: '',
@@ -242,6 +318,8 @@ export default function SettingsView() {
   const openAiEdit = (config: AiConfig) => {
     setEditingAiConfig(config);
     setTestResult({});
+    setFetchedModels([]);
+    setModelSource('preset');
     setProviderCategoryFilter('all');
     setAiForm({
       name: config.name,
@@ -745,7 +823,7 @@ export default function SettingsView() {
       {/* AI Config Dialog */}
       <Dialog open={aiDialog} onOpenChange={(open) => {
         setAiDialog(open);
-        if (!open) { setEditingAiConfig(null); setTestResult({}); }
+        if (!open) { setEditingAiConfig(null); setTestResult({}); setFetchedModels([]); }
       }}>
         <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
@@ -901,9 +979,33 @@ export default function SettingsView() {
               </div>
             </div>
 
-            {/* 模型选择 */}
+            {/* 模型选择 - 支持动态拉取 */}
             <div className="space-y-2">
-              <Label>模型</Label>
+              <div className="flex items-center justify-between">
+                <Label>模型</Label>
+                <div className="flex items-center gap-2">
+                  {fetchedModels.length > 0 && (
+                    <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                      {modelSource === 'api' ? '已从API拉取' : '预设模型'}
+                    </span>
+                  )}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 text-xs"
+                    onClick={handleFetchModels}
+                    disabled={fetchingModels || !aiForm.baseUrl || !aiForm.apiKey}
+                  >
+                    {fetchingModels ? (
+                      <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                    ) : (
+                      <Zap className="h-3 w-3 mr-1" />
+                    )}
+                    拉取模型
+                  </Button>
+                </div>
+              </div>
               {availableModels.length > 0 ? (
                 <Select
                   value={aiForm.model}
@@ -914,7 +1016,7 @@ export default function SettingsView() {
                   </SelectTrigger>
                   <SelectContent>
                     {availableModels.map((m) => (
-                      <SelectItem key={m.modelId} value={m.modelId}>
+                      <SelectItem key={m.id} value={m.id}>
                         <span className="flex flex-col">
                           <span>{m.label}</span>
                           {m.description && (
@@ -936,6 +1038,12 @@ export default function SettingsView() {
                 }
                 className={availableModels.length > 0 ? 'mt-1' : ''}
               />
+              {fetchingModels && (
+                <p className="text-xs text-muted-foreground flex items-center gap-1">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  正在从供应商API拉取模型列表...
+                </p>
+              )}
             </div>
 
             {/* 连接测试结果 */}
@@ -972,9 +1080,9 @@ export default function SettingsView() {
             </Button>
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => setAiDialog(false)}>取消</Button>
-              <Button onClick={handleSaveAi} disabled={savingAi} className="gap-1.5">
+              <Button onClick={handleSaveAi} disabled={savingAi} className={`gap-1.5 ${testResult['temp-test']?.success ? 'bg-green-600 hover:bg-green-700' : ''}`}>
                 {savingAi ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                保存
+                {testResult['temp-test']?.success ? '测试通过，保存' : '保存'}
               </Button>
             </div>
           </DialogFooter>
