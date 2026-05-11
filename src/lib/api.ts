@@ -127,6 +127,8 @@ export const agentConfigApi = {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
+  delete: (id: string) =>
+    fetchAPI(`/agent-configs?id=${id}`, { method: 'DELETE' }),
 };
 
 export const aiConfigApi = {

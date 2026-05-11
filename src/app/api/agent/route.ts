@@ -619,16 +619,32 @@ ${message || '请根据以上分镜信息，为每个分镜生成英文视频提
         const { characters: extractedCharacters, scenes: extractedScenes } =
           extractCharactersAndScenes(result);
 
-        // Save characters
-        if (extractedCharacters.length > 0) {
-          const roleOrder: Record<string, number> = {
-            '主角': 0, '配角': 10, '群演': 20,
-          };
+        await db.$transaction(async (tx) => {
+          // Delete existing characters and scenes to avoid duplicates on re-run
+          await tx.character.deleteMany({ where: { dramaId } });
+          if (episodeId) {
+            // Delete scene associations first (junction table)
+            const existingScenes = await tx.scene.findMany({
+              where: { dramaId, episodeId },
+              select: { id: true },
+            });
+            if (existingScenes.length > 0) {
+              await tx.episodeScene.deleteMany({
+                where: { episodeId, sceneId: { in: existingScenes.map(s => s.id) } },
+              });
+            }
+            await tx.scene.deleteMany({ where: { dramaId, episodeId } });
+          }
 
-          await db.$transaction(
-            (extractedCharacters as Record<string, unknown>[]).map((char, index) => {
+          // Save characters
+          if (extractedCharacters.length > 0) {
+            const roleOrder: Record<string, number> = {
+              '主角': 0, '配角': 10, '群演': 20,
+            };
+            for (let index = 0; index < extractedCharacters.length; index++) {
+              const char = extractedCharacters[index] as Record<string, unknown>;
               const roleName = (char.role as string) || '配角';
-              return db.character.create({
+              await tx.character.create({
                 data: {
                   dramaId,
                   name: (char.name as string)?.trim() || `角色${index + 1}`,
@@ -639,15 +655,13 @@ ${message || '请根据以上分镜信息，为每个分镜生成英文视频提
                   sortOrder: (roleOrder[roleName] ?? 10) + index,
                 },
               });
-            })
-          );
-        }
+            }
+          }
 
-        // Save scenes
-        if (extractedScenes.length > 0) {
-          await db.$transaction(
-            (extractedScenes as Record<string, unknown>[]).map((scene) => {
-              return db.scene.create({
+          // Save scenes
+          if (extractedScenes.length > 0) {
+            for (const scene of extractedScenes as Record<string, unknown>[]) {
+              await tx.scene.create({
                 data: {
                   dramaId,
                   episodeId: episodeId || null,
@@ -656,9 +670,9 @@ ${message || '请根据以上分镜信息，为每个分镜生成英文视频提
                   prompt: (scene.prompt as string) || '',
                 },
               });
-            })
-          );
-        }
+            }
+          }
+        });
 
         processedResult = {
           charactersCount: extractedCharacters.length,
@@ -673,15 +687,14 @@ ${message || '请根据以上分镜信息，为每个分镜生成英文视频提
         const storyboards = extractJSON(result);
         if (storyboards && storyboards.length > 0 && episodeId) {
           const eid = episodeId;
-          // Delete existing storyboards for this episode
-          await db.storyboard.deleteMany({
-            where: { episodeId: eid },
-          });
+          const created = await db.$transaction(async (tx) => {
+            // Delete existing storyboards (cascading should handle junction table)
+            await tx.storyboard.deleteMany({ where: { episodeId: eid } });
 
-          // Create new storyboards
-          const created = await db.$transaction(
-            (storyboards as Record<string, unknown>[]).map((sb, index) => {
-              return db.storyboard.create({
+            const items = [];
+            for (let index = 0; index < storyboards.length; index++) {
+              const sb = storyboards[index] as Record<string, unknown>;
+              const item = await tx.storyboard.create({
                 data: {
                   episodeId: eid,
                   storyboardNumber: (sb.storyboardNumber as number) || (index + 1),
@@ -700,8 +713,10 @@ ${message || '请根据以上分镜信息，为每个分镜生成英文视频提
                   status: 'pending',
                 },
               });
-            })
-          );
+              items.push(item);
+            }
+            return items;
+          });
 
           processedResult = {
             storyboardsCount: created.length,

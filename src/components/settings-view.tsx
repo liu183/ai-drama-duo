@@ -177,6 +177,7 @@ export default function SettingsView() {
     maxSteps: 20,
   });
   const [savingAgent, setSavingAgent] = useState(false);
+  const [deleteAgentId, setDeleteAgentId] = useState<string | null>(null);
 
   const loadConfigs = useCallback(async () => {
     setLoading(true);
@@ -480,6 +481,18 @@ export default function SettingsView() {
       toast.error('保存失败');
     } finally {
       setSavingAgent(false);
+    }
+  };
+
+  const handleDeleteAgent = async () => {
+    if (!deleteAgentId) return;
+    try {
+      await agentConfigApi.delete(deleteAgentId);
+      toast.success('Agent配置删除成功');
+      setDeleteAgentId(null);
+      loadConfigs();
+    } catch {
+      toast.error('删除失败');
     }
   };
 
@@ -799,15 +812,26 @@ export default function SettingsView() {
                                 <span>步数: {config.maxSteps}</span>
                               </div>
                             </div>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="shrink-0 gap-1"
-                              onClick={() => openAgentEdit(config)}
-                            >
-                              <Pencil className="h-3 w-3" />
-                              编辑
-                            </Button>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="gap-1"
+                                onClick={() => openAgentEdit(config)}
+                              >
+                                <Pencil className="h-3 w-3" />
+                                编辑
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="gap-1 text-destructive hover:text-destructive"
+                                onClick={() => setDeleteAgentId(config.id)}
+                              >
+                                <Trash2 className="h-3 w-3" />
+                                删除
+                              </Button>
+                            </div>
                           </div>
                         </CardContent>
                       </Card>
@@ -1193,6 +1217,24 @@ export default function SettingsView() {
             <AlertDialogCancel>取消</AlertDialogCancel>
             <AlertDialogAction onClick={handleDeleteAi} className="bg-destructive text-white hover:bg-destructive/90">
               删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Agent Config Delete Confirmation */}
+      <AlertDialog open={!!deleteAgentId} onOpenChange={(open) => { if (!open) setDeleteAgentId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认删除</AlertDialogTitle>
+            <AlertDialogDescription>
+              删除后无法恢复，确定要删除此 Agent 配置吗？
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteAgent} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              确认删除
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

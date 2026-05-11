@@ -26,6 +26,7 @@ import {
   sceneApi,
   storyboardApi,
   agentApi,
+  dramaApi,
 } from '@/lib/api';
 import { PIPELINE_STEPS, AGENT_TYPES, AGENT_STEPS, STATUS_MAP } from '@/lib/constants';
 import type { Episode, Character, Scene, Storyboard } from '@/types';
@@ -70,6 +71,8 @@ export default function EpisodeStudioView({
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [aiSteps, setAiSteps] = useState<{ text: string; done: boolean; elapsed: string }[]>([]);
   const [aiProcessingDone, setAiProcessingDone] = useState(false);
+  const [dramaTitle, setDramaTitle] = useState('');
+  const [dramaMetadata, setDramaMetadata] = useState<Record<string, unknown> | null>(null);
 
   const mainContentRef = useRef<HTMLDivElement>(null);
   const aiTimerRef = useRef<NodeJS.Timeout[]>([]);
@@ -93,11 +96,12 @@ export default function EpisodeStudioView({
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [ep, chars, sceneList, sbList] = await Promise.all([
+      const [ep, chars, sceneList, sbList, dramaRes] = await Promise.all([
         episodeApi.get(episodeId),
         characterApi.list(dramaId),
         sceneApi.list(dramaId),
         storyboardApi.list(episodeId),
+        dramaApi.get(dramaId).catch(() => null),
       ]);
       // API responses are wrapped in { data: ... }, unwrap them
       const epData = ep.data || ep;
@@ -106,6 +110,18 @@ export default function EpisodeStudioView({
       setScenes(Array.isArray(sceneList) ? sceneList : sceneList.data || sceneList.items || []);
       setStoryboards(Array.isArray(sbList) ? sbList : sbList.data || sbList.items || []);
       setRawContent(epData.content || '');
+      // Extract drama title and metadata
+      if (dramaRes) {
+        const dramaData = dramaRes.data || dramaRes;
+        setDramaTitle(dramaData.title || '');
+        if (dramaData.metadata) {
+          try {
+            setDramaMetadata(JSON.parse(dramaData.metadata));
+          } catch {
+            setDramaMetadata(null);
+          }
+        }
+      }
     } catch {
       toast.error('加载数据失败');
     } finally {
@@ -408,6 +424,8 @@ export default function EpisodeStudioView({
                       dramaId,
                       episodeId,
                       loadData,
+                      dramaTitle,
+                      dramaMetadata,
                     })}
                   </motion.div>
                 </AnimatePresence>

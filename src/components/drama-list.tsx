@@ -137,8 +137,15 @@ export default function DramaListView({ onSelectDrama, refreshKey }: DramaListPr
     }
   }, [search, statusFilter]);
 
+  // Debounced search
+  const searchTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+
   useEffect(() => {
-    loadDramas();
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => {
+      loadDramas();
+    }, 300);
+    return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
   }, [loadDramas, refreshKey]);
 
   const handleCreate = async () => {

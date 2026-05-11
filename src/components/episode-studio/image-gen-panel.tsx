@@ -31,12 +31,34 @@ interface ImageGenPanelProps {
   storyboards: Storyboard[];
   agentLoading: boolean;
   loadData: () => Promise<void>;
+  dramaMetadata?: Record<string, unknown> | null;
+}
+
+function getImageSize(metadata?: Record<string, unknown> | null): string {
+  if (!metadata) return '1024x1024';
+  try {
+    const imageStyle = (metadata.imageStyle || {}) as Record<string, string>;
+    const ratio = imageStyle.aspectRatio || '1:1';
+    const sizeMap: Record<string, string> = {
+      '1:1': '1024x1024',
+      '16:9': '1344x768',
+      '9:16': '768x1344',
+      '4:3': '1152x864',
+      '3:4': '864x1152',
+      '3:2': '1152x768',
+      '2:3': '768x1152',
+    };
+    return sizeMap[ratio] || '1024x1024';
+  } catch {
+    return '1024x1024';
+  }
 }
 
 export function ImageGenPanel({
   storyboards,
   agentLoading,
   loadData,
+  dramaMetadata,
 }: ImageGenPanelProps) {
   const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; generating: boolean }>({
     current: 0,
@@ -75,7 +97,7 @@ export function ImageGenPanel({
       const resp = await fetch('/api/generate/image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ storyboardId: sbId, prompt: sb.imagePrompt, size: '1024x1024' }),
+        body: JSON.stringify({ storyboardId: sbId, prompt: sb.imagePrompt, size: getImageSize(dramaMetadata) }),
       });
       const data = await resp.json();
       if (data.success) {
@@ -112,7 +134,7 @@ export function ImageGenPanel({
         const resp = await fetch('/api/generate/image', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ storyboardId: sb.id, prompt: sb.imagePrompt, size: '1024x1024' }),
+          body: JSON.stringify({ storyboardId: sb.id, prompt: sb.imagePrompt, size: getImageSize(dramaMetadata) }),
         });
         const data = await resp.json();
         if (data.success) {

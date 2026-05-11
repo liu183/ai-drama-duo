@@ -50,6 +50,8 @@ export interface StepContentProps {
   dramaId: string;
   episodeId: string;
   loadData: () => Promise<void>;
+  dramaTitle?: string;
+  dramaMetadata?: Record<string, unknown> | null;
 }
 
 export function renderStepContent(props: StepContentProps) {
@@ -352,6 +354,7 @@ export function renderStepContent(props: StepContentProps) {
           storyboards={props.storyboards}
           agentLoading={props.agentLoading}
           loadData={props.loadData}
+          dramaMetadata={props.dramaMetadata}
         />
       );
 
@@ -427,7 +430,7 @@ export function renderStepContent(props: StepContentProps) {
           }))}
           episodeId={props.episodeId}
           episodeTitle={props.episode.title || ''}
-          dramaTitle={''}
+          dramaTitle={props.dramaTitle || ''}
           duration={props.episode.duration}
           status={props.episode.status}
         />
